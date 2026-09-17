@@ -1,0 +1,61 @@
+scoring:
+  role_match: 40
+  proven_skill: 3
+  proven_skill_max: 30
+  responsibility: 2
+  responsibility_max: 20
+  preferred_location: 10
+  tool: 1
+  tool_max: 10
+  domain_match: 2
+  domain_match_max: 10
+  experience_area: 2
+  experience_area_max: 10
+  minimum_evidence_matches: 2
+
+india_only: true
+minimum_match_score: 45
+excluded_domains:
+  - manufacturing
+  - cybersecurity
+  - healthcare
+  - nursing
+
+categories:
+  strong: 75
+  good: 60
+  review: 45
+
+preferred_locations:
+  - Hyderabad
+  - Remote
+
+skill_aliases:
+  Business Analysis:
+    - business analysis
+    - business analyst
+    - business requirements
+
+  Product Analytics:
+    - product analytics
+    - product insights
+    - product metrics
+
+  Requirements Gathering:
+    - requirements gathering
+    - requirements analysis
+    - business requirements
+
+  Stakeholder Management:
+    - stakeholder management
+    - stakeholder communication
+    - stakeholder engagement
+
+  UAT:
+    - uat
+    - user acceptance testing
+    - acceptance testing
+
+  SQL:
+    - sql
+    - structured query language

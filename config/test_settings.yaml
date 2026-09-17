@@ -1,0 +1,8 @@
+project:
+  name: job_search_agent
+  export_directory: data/exports
+
+search:
+  locations:
+    - Hyderabad
+    - Remote

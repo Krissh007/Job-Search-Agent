@@ -1,0 +1,69 @@
+target_roles:
+  - Business Analyst
+  - AI Business Analyst
+  - AI Product Analyst
+  - Product Analyst
+  - Business Systems Analyst
+  - Functional Analyst
+  - Requirements Analyst
+  - Product Operations Analyst
+  - Implementation Analyst
+  - Process Analyst
+
+proven_skills:
+  - Business Analysis
+  - Product Analytics
+  - Requirements Gathering
+  - Stakeholder Management
+  - Solution Consulting
+  - Enterprise Account Management
+  - Customer Experience
+  - Product Documentation
+  - Data Analysis
+  - UAT
+  - Agile Delivery
+
+industries:
+  - Enterprise SaaS
+  - Banking
+  - FinTech
+  - AI Analytics
+
+responsibilities:
+  - Business requirements gathering
+  - BRD and FRD preparation
+  - User story writing
+  - Acceptance criteria definition
+  - UAT coordination
+  - Stakeholder communication
+  - Product documentation
+  - Analytics and reporting
+  - Solution explanation
+  - Cross-functional collaboration
+
+tools_and_technologies:
+  - SQL
+  - AWS Athena
+  - AWS S3
+  - AI
+  - LLM
+  - RAG
+  - Conversational Analytics
+  - Enterprise SaaS
+
+experience_summary: >
+  Professional experience across business analysis, product analytics,
+  enterprise account management, customer experience, and solution
+  consulting, including work with AI-powered analytics platforms.
+
+experience_areas:
+  - Business Analysis
+  - Product Analytics
+  - Enterprise Account Management
+  - Customer Experience
+  - Solution Consulting
+  - AI-powered Analytics
+
+# Fill these from the resume when available. Blank values disable the check.
+experience_years_min: ""
+experience_years_max: ""
