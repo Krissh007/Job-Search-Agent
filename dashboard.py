@@ -207,7 +207,7 @@ def sidebar_filters(df: pd.DataFrame):
     sel_status = st.sidebar.multiselect(
         "Status",
         statuses,
-        default=[s for s in statuses if s not in ("skipped", "error")],
+        default=[s for s in statuses if s not in ("skipped", "error", "rejected")],
     )
     sel_source = st.sidebar.multiselect("Source", sources, default=sources)
     min_score  = st.sidebar.slider("Min Match Score", 0, 100, 45)
@@ -325,52 +325,275 @@ def tab_overview(df: pd.DataFrame, filtered: pd.DataFrame):
     )
 
 
+# ── Description cleaner ───────────────────────────────────────────────────────
+_NAV_JUNK = [
+    "jobs companies services search jobs here",
+    "loginregister for employers",
+    "login register",
+    "continue with google",
+    "continue with linkedin",
+    "sign in",
+    "create account",
+    "skip to main",
+    "back to search",
+]
+
+def _clean_description(raw: str) -> str:
+    """Strip nav/chrome junk scraped from the page and return clean paragraphs."""
+    if not raw:
+        return ""
+    lines = raw.replace("\r", "\n").split("\n")
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        low = stripped.lower()
+        if any(junk in low for junk in _NAV_JUNK):
+            continue
+        if len(stripped) < 4:
+            continue
+        cleaned.append(stripped)
+    return "\n".join(cleaned)
+
+
+def _render_job_card(row: pd.Series) -> None:
+    """Render a single job as a clean, job-portal-style card."""
+    title   = row.get("title", "Untitled")
+    company = row.get("company", "")
+    location = row.get("location", "")
+    source  = row.get("source", "")
+    status  = row.get("status", "new")
+    score   = float(row.get("match_score", 0))
+    cat     = row.get("match_category", "")
+    posted  = row.get("posted_date", "") or ""
+    url     = row.get("job_url", "")
+    reasons = row.get("match_reasons") or []
+    missing = row.get("missing_keywords") or []
+    notes   = row.get("notes", "") or ""
+    desc    = _clean_description(str(row.get("description", "") or ""))
+
+    if isinstance(reasons, str):
+        try:
+            import json; reasons = json.loads(reasons)
+        except Exception:
+            reasons = [reasons]
+    if isinstance(missing, str):
+        try:
+            import json; missing = json.loads(missing)
+        except Exception:
+            missing = [missing]
+
+    discovered = row.get("discovered_at")
+    applied_at = row.get("applied_at")
+
+    # ── score colour ──
+    if score >= 75:
+        score_color = "#2EAA6E"
+    elif score >= 60:
+        score_color = "#4A90D9"
+    elif score >= 45:
+        score_color = "#E8A838"
+    else:
+        score_color = "#D94A4A"
+
+    status_color = STATUS_COLORS.get(status, "#555")
+
+    # ── source apply label ──
+    apply_labels = {
+        "naukri":   "Apply on Naukri",
+        "linkedin": "Apply on LinkedIn",
+        "indeed":   "Apply on Indeed",
+    }
+    apply_label = apply_labels.get(source.lower(), "View Job Posting")
+
+    # ── build metadata chips before markdown ──
+    meta_chips = f'<span>📍 {location or "—"}</span>'
+    meta_chips += f'<span>🏢 {source.capitalize() if source else "—"}</span>'
+    if posted.strip():
+        meta_chips += f"<span>🕐 {posted}</span>"
+    if pd.notna(applied_at):
+        meta_chips += f"<span>✅ Applied: {applied_at.strftime('%d %b %Y')}</span>"
+    if pd.notna(discovered):
+        meta_chips += f"<span>🔍 Found: {discovered.strftime('%d %b %Y')}</span>"
+
+    # ── header card ──
+    st.markdown(
+        f"""
+        <div style="background:#1A1A2E;border:1px solid #2E2E4A;border-radius:12px;
+                    padding:20px 24px 16px 24px;margin-bottom:4px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+            <div>
+              <h2 style="margin:0 0 4px 0;font-size:1.3rem;color:#E8E8FF">{title}</h2>
+              <p style="margin:0;font-size:1rem;color:#A0A0C0;font-weight:500">{company}</p>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:1.8rem;font-weight:800;color:{score_color};line-height:1">{score:.0f}</div>
+              <div style="font-size:0.72rem;color:#7070A0;margin-top:2px">Match Score</div>
+              <div style="margin-top:6px">
+                <span style="background:{score_color}22;color:{score_color};border:1px solid {score_color}55;
+                             padding:2px 10px;border-radius:20px;font-size:0.75rem;font-weight:600">{cat}</span>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;font-size:0.82rem;color:#9090B8">
+            {meta_chips}
+          </div>
+          <div style="margin-top:14px;background:#2A2A42;border-radius:8px;height:8px;overflow:hidden">
+            <div style="width:{min(score,100):.0f}%;height:100%;background:{score_color};border-radius:8px"></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── action row ──
+    ac1, ac2, ac3 = st.columns([2, 2, 1])
+    with ac3:
+        if url and url.startswith("http"):
+            st.link_button(apply_label, url, use_container_width=True)
+
+    # ── match signals ──
+    if reasons or missing:
+        m1, m2 = st.columns(2)
+        with m1:
+            st.markdown(
+                "<p style='font-size:0.8rem;font-weight:600;color:#9090B8;"
+                "text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px'>"
+                "Matched Signals</p>",
+                unsafe_allow_html=True,
+            )
+            if reasons:
+                tags = "".join(
+                    f"<span style='display:inline-block;background:#1C3A2A;color:#2EAA6E;"
+                    f"border:1px solid #2EAA6E44;padding:2px 10px;border-radius:12px;"
+                    f"font-size:0.75rem;margin:2px 3px 2px 0'>{r}</span>"
+                    for r in reasons[:20]
+                )
+                st.markdown(tags, unsafe_allow_html=True)
+            else:
+                st.caption("None recorded")
+
+        with m2:
+            st.markdown(
+                "<p style='font-size:0.8rem;font-weight:600;color:#9090B8;"
+                "text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px'>"
+                "Missing Keywords</p>",
+                unsafe_allow_html=True,
+            )
+            if missing:
+                tags = "".join(
+                    f"<span style='display:inline-block;background:#2A1C1C;color:#D94A4A;"
+                    f"border:1px solid #D94A4A44;padding:2px 10px;border-radius:12px;"
+                    f"font-size:0.75rem;margin:2px 3px 2px 0'>{m}</span>"
+                    for m in missing[:20]
+                )
+                st.markdown(tags, unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    "<span style='color:#2EAA6E;font-size:0.85rem'>No gaps — full match!</span>",
+                    unsafe_allow_html=True,
+                )
+
+    if notes.strip():
+        st.markdown(
+            f"<div style='background:#1E2A1E;border-left:3px solid #2EAA6E;"
+            f"padding:8px 14px;border-radius:0 6px 6px 0;font-size:0.83rem;color:#A0C0A0;"
+            f"margin-top:8px'>📝 {notes}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── job description ──
+    if desc:
+        st.markdown(
+            "<p style='font-size:0.8rem;font-weight:600;color:#9090B8;"
+            "text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 8px 0'>"
+            "Job Description</p>",
+            unsafe_allow_html=True,
+        )
+        paragraphs = [p for p in desc.split("\n") if p.strip()]
+        html_desc = "".join(
+            f"<p style='margin:0 0 10px 0;line-height:1.7'>{p}</p>"
+            for p in paragraphs[:80]
+        )
+        st.markdown(
+            f"<div style='background:#12121E;border:1px solid #2A2A3E;border-radius:10px;"
+            f"padding:18px 22px;font-size:0.86rem;color:#C0C0D8;max-height:420px;"
+            f"overflow-y:auto;line-height:1.7'>{html_desc}</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<hr style='border:none;border-top:1px solid #2A2A3E;margin:18px 0'>", unsafe_allow_html=True)
+
+
 # ── TAB 2 — Job Details ───────────────────────────────────────────────────────
 def tab_job_details(filtered: pd.DataFrame):
-    st.markdown(f"Showing **{min(len(filtered), 50)}** of **{len(filtered)}** jobs (sorted by score).")
+    total = len(filtered)
+    show  = min(total, 50)
+    st.markdown(f"Showing **{show}** of **{total}** jobs · sorted by match score")
 
     if filtered.empty:
-        st.info("No jobs to show. Adjust your sidebar filters.")
+        st.info("No jobs match your current filters. Try adjusting the sidebar.")
         return
 
     for _, row in filtered.head(50).iterrows():
-        icon   = STATUS_ICONS.get(row.get("status", ""), "")
-        title  = row.get("title", "Untitled")
-        co     = row.get("company", "")
-        score  = float(row.get("match_score", 0))
-        cat    = row.get("match_category", "")
-        status = row.get("status", "new")
+        _render_job_card(row)
 
-        with st.expander(f"{icon}  {title}  ·  {co}  ·  Score {score:.0f}"):
+    if total > 50:
+        st.caption(f"Showing top 50 of {total}. Narrow filters to see others.")
+
+    if False:  # dead block kept so indentation stays valid
+        with st.expander(""):
+
+            # ── Top info row ──────────────────────────────────────────────
             c1, c2, c3 = st.columns([2, 2, 1])
             with c1:
+                st.markdown(f"**Company:** {co or '—'}")
                 st.markdown(f"**Location:** {row.get('location','—')}")
-                st.markdown(f"**Source:** {row.get('source','—')}")
-                st.markdown(f"**Posted:** {row.get('posted_date','—')}")
+                st.markdown(f"**Source:** {source or '—'}")
+
+                posted = row.get("posted_date", "")
+                st.markdown(f"**Posted:** {posted if posted and str(posted).strip() else '—'}")
+
                 discovered = row.get("discovered_at")
                 if pd.notna(discovered):
                     st.markdown(f"**Discovered:** {discovered.strftime('%Y-%m-%d %H:%M')}")
+
             with c2:
                 st.markdown(
                     f"**Status:** {_badge(status)}",
                     unsafe_allow_html=True,
                 )
-                st.markdown(f"**Category:** {cat}")
+                st.markdown(f"**Match Category:** {cat or '—'}")
                 applied_at = row.get("applied_at")
                 if pd.notna(applied_at):
-                    st.markdown(f"**Applied:** {applied_at.strftime('%Y-%m-%d')}")
+                    st.markdown(f"**Applied On:** {applied_at.strftime('%Y-%m-%d')}")
+                updated_at = row.get("updated_at")
+                if pd.notna(updated_at):
+                    st.markdown(f"**Last Updated:** {updated_at.strftime('%Y-%m-%d %H:%M')}")
+
                 st.markdown("**Match Score:**")
                 st.markdown(_score_bar(score), unsafe_allow_html=True)
+
             with c3:
-                url = row.get("job_url", "")
                 if url and url.startswith("http"):
-                    st.link_button("🔗 Open Job", url, use_container_width=True)
+                    # Show source-appropriate label
+                    if source == "naukri":
+                        btn_label = "Apply on Naukri"
+                    elif source == "linkedin":
+                        btn_label = "Apply on LinkedIn"
+                    elif source == "indeed":
+                        btn_label = "Apply on Indeed"
+                    else:
+                        btn_label = "View Job Posting"
+                    st.link_button(btn_label, url, use_container_width=True)
+                    st.caption(f"Opens {source} listing page where you can apply directly.")
 
             st.markdown("---")
 
-            # match reasons / missing keywords
-            reasons  = row.get("match_reasons") or []
-            missing  = row.get("missing_keywords") or []
+            # ── Match signals ─────────────────────────────────────────────
+            reasons = row.get("match_reasons") or []
+            missing = row.get("missing_keywords") or []
             if isinstance(reasons, str):
                 reasons = [reasons]
             if isinstance(missing, str):
@@ -384,19 +607,35 @@ def tab_job_details(filtered: pd.DataFrame):
                     st.info("No match reasons recorded.")
             with r2:
                 if missing:
-                    st.warning("**Missing keywords:**\n\n" + "\n".join(f"• m" for m in missing))
+                    st.warning("**Missing keywords:**\n\n" + "\n".join(f"• {m}" for m in missing))
                 else:
-                    st.success("No missing keywords!")
+                    st.success("No missing keywords — strong match!")
 
+            # ── Notes ─────────────────────────────────────────────────────
             notes = row.get("notes", "")
             if notes and str(notes).strip():
-                st.info(f"**Notes:** {notes}")
+                st.info(f"**System Notes:** {notes}")
 
-            # full description
+            st.markdown("---")
+
+            # ── Full Job Description ──────────────────────────────────────
             desc = str(row.get("description", "")).strip()
             if desc:
-                with st.expander("📄 Full Description"):
-                    st.text(desc[:8000])
+                st.markdown("**Full Job Description**")
+                # Render description as readable markdown-like text, not raw monospace
+                # Break into paragraphs for readability
+                paragraphs = [p.strip() for p in desc.split("\n") if p.strip()]
+                st.markdown(
+                    "<div style='background:#161625;border:1px solid #2A2A3E;"
+                    "border-radius:8px;padding:16px 20px;font-size:0.88rem;"
+                    "line-height:1.7;color:#C8C8E0;max-height:500px;overflow-y:auto'>"
+                    + "<br>".join(p for p in paragraphs[:120])
+                    + ("..." if len(paragraphs) > 120 else "")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption("No description available for this job.")
 
 
 # ── TAB 3 — Applications ─────────────────────────────────────────────────────
