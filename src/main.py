@@ -11,6 +11,7 @@ from .resume_profile import load_resume_profile
 from .matching.job_matcher import JobMatcher
 from .storage import JobStorage
 from .sources.indeed_source import IndeedSource
+from .sources.naukri_source import NaukriSource
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -185,73 +186,103 @@ def main() -> None:
 
             logger.info("Browser started.")
 
+            configured_sources = config.get("sources", [])
+
             for keyword in keywords:
                 for location in locations:
-                    print("-" * 72)
-                    print(
-                        f"Searching Indeed for: "
-                        f"{keyword} | {location}"
-                    )
-                    print("-" * 72)
+                    for source_name in configured_sources:
+                        print("-" * 72)
+                        print(
+                            f"Searching {source_name.capitalize()} for: "
+                            f"{keyword} | {location}"
+                        )
+                        print("-" * 72)
 
-                    logger.info(
-                        "Searching Indeed for '%s' in '%s'",
-                        keyword,
-                        location,
-                    )
+                        logger.info(
+                            "Searching %s for '%s' in '%s'",
+                            source_name,
+                            keyword,
+                            location,
+                        )
 
-                    indeed_source = IndeedSource(
-                        page=page,
-                    )
-
-                    discovered_jobs = indeed_source.discover_jobs(
-                        keyword=keyword,
-                        location=location,
-                        max_jobs=max_results_per_query,
-                    )
-
-                    logger.info(
-                        "Indeed returned %s jobs.",
-                        len(discovered_jobs),
-                    )
-
-                    for job in discovered_jobs:
-                        job["search_keyword"] = keyword
-                        job["search_location"] = location
-
-                        try:
-                            enriched_job = matcher.enrich_job(job)
-
-                            score = float(
-                                enriched_job.get(
-                                    "match_score",
-                                    0,
-                                )
-                                or 0
+                        if source_name == "naukri":
+                            source = NaukriSource(
+                                page=page,
+                                keyword=keyword,
+                                location=location,
                             )
+                        elif source_name == "indeed":
+                            source = IndeedSource(
+                                page=page,
+                            )
+                        else:
+                            logger.warning(
+                                "Unknown source '%s', skipping.",
+                                source_name,
+                            )
+                            continue
 
-                            if score >= minimum_match_score:
-                                all_jobs.append(enriched_job)
+                        discovered_jobs = source.discover_jobs(
+                            max_jobs=max_results_per_query,
+                        )
 
-                                logger.info(
-                                    "Accepted job: %s | %s | Score: %.1f",
-                                    enriched_job.get("title", ""),
-                                    enriched_job.get("company", ""),
-                                    score,
-                                )
+                        logger.info(
+                            "%s returned %s jobs.",
+                            source_name.capitalize(),
+                            len(discovered_jobs),
+                        )
+
+                        for job in discovered_jobs:
+                            # Job objects are dataclasses; dicts use [] assignment
+                            if isinstance(job, dict):
+                                job["search_keyword"] = keyword
+                                job["search_location"] = location
                             else:
-                                logger.info(
-                                    "Skipped low-score job: %s | Score: %.1f",
-                                    enriched_job.get("title", ""),
-                                    score,
+                                job.search_term = keyword
+                                job.search_location = location
+
+                            try:
+                                enriched_job = matcher.enrich_job(job)
+
+                                score = float(
+                                    enriched_job.get(
+                                        "match_score",
+                                        0,
+                                    )
+                                    or 0
                                 )
 
-                        except Exception as exc:
-                            logger.exception(
-                                "Could not match job '%s': %s",
-                                job.get("title", ""),
-                                exc,
-                            )
+                                if (
+                                    score >= minimum_match_score
+                                    and enriched_job.get("eligible", False)
+                                ):
+                                    all_jobs.append(enriched_job)
+
+                                    logger.info(
+                                        "Accepted job: %s | %s | Score: %.1f",
+                                        enriched_job.get("title", ""),
+                                        enriched_job.get("company", ""),
+                                        score,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Skipped ineligible or low-score job: %s | Score: %.1f | Reasons: %s",
+                                        enriched_job.get("title", ""),
+                                        score,
+                                        "; ".join(
+                                            enriched_job.get(
+                                                "rejection_reasons",
+                                                [],
+                                            )
+                                        ),
+                                    )
+
+                            except Exception as exc:
+                                logger.exception(
+                                    "Could not match job '%s': %s",
+                                    job.get("title", "") if isinstance(job, dict) else job.title,
+                                    exc,
+                                )
 
         except KeyboardInterrupt:
             print()
@@ -297,16 +328,16 @@ def main() -> None:
         return
 
     try:
-        saved_jobs = storage.save_jobs(all_jobs)
+        saved_count = storage.save_jobs(all_jobs)
 
-        print(f"Jobs saved: {saved_jobs}")
+        print(f"Jobs saved: {saved_count}")
 
         export_path = storage.export_to_excel("job_search_results.xlsx")
         print(f"Excel export: {export_path}")
 
         logger.info(
             "Saved %s jobs to storage.",
-            len(saved_jobs),
+            saved_count,
         )
 
     except PermissionError:

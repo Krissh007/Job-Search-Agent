@@ -58,7 +58,12 @@ class JobMatcher:
         target_roles = self._profile_list("target_roles")
         proven_skills = self._profile_list("proven_skills")
         responsibilities = self._profile_list("responsibilities")
+        # Candidate profiles created by earlier versions used
+        # ``tools_and_technologies``.  Accept both spellings so the tools
+        # evidence configured in the profile is actually considered.
         tools = self._profile_list("tools_technologies")
+        if not tools:
+            tools = self._profile_list("tools_and_technologies")
         industries = self._profile_list("industries")
         experience_areas = self._profile_list("experience_areas")
         preferred_locations = self._get_preferred_locations()
@@ -287,6 +292,19 @@ class JobMatcher:
         Backward-compatible alias for match().
         """
         return self.match(job)
+
+    def enrich_job(self, job: Any) -> Dict[str, Any]:
+        """Return the complete job record with its matching result applied.
+
+        ``match`` deliberately returns only normalized fields and scoring
+        information.  Discovery callers also need source fields such as
+        posting date, salary, and discovery time for storage and exports.
+        This compatibility method preserves those fields while overlaying the
+        scoring result.
+        """
+        job_data = self._to_dict(job)
+        job_data.update(self.match(job))
+        return job_data
 
     def _profile_list(self, field_name: str) -> List[str]:
         if self.resume_profile is None:
