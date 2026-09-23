@@ -9,6 +9,7 @@ Run with:  python -m src.pipelines.discovery_pipeline
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -269,14 +270,9 @@ def save_jobs(database: Database, jobs: Iterable[Job], stats: RunStats) -> list[
 # ----------------------------------------------------------------------
 
 
-def prepare_and_track(
-    context: RunContext,
-    database: Database,
-    leads: list[Job],
-) -> list[dict[str, Any]]:
-    """Optionally pre-fill forms, write the review page and application rows."""
+def prepare_applications(context: RunContext, leads: list[Job]) -> list[dict[str, Any]]:
+    """Optionally pre-fill forms for this run's new leads."""
     rows = [lead.to_dict() for lead in leads]
-
     application = context.settings.application
     if application.prepare_after_search and rows:
         rows = prepare_new_applications(
@@ -284,8 +280,54 @@ def prepare_and_track(
             profile_path=context.application_profile_path,
             max_jobs=application.max_jobs_per_run,
         )
+    return rows
 
-    review_page = create_application_review_page(rows, context.export_directory)
+
+def leads_for_day(
+    database: Database,
+    day: date,
+    prepared_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Every non-rejected job first discovered on ``day``, so a second run on
+    the same day adds to that day's workbook and review page instead of
+    replacing them. This run's preparation results override stored ones.
+    """
+    prepared = {row["job_url"]: row for row in prepared_rows}
+    applications = database.get_applications()
+    day_prefix = day.isoformat()
+
+    rows: list[dict[str, Any]] = []
+    for job in reversed(database.get_jobs()):  # oldest first
+        url = job["job_url"]
+        if url in prepared:
+            rows.append({**job, **prepared.pop(url)})
+            continue
+        if not str(job.get("discovered_at") or "").startswith(day_prefix):
+            continue
+        if job.get("status") == "rejected":
+            continue
+        row = dict(job)
+        record = applications.get(url)
+        if record:
+            row["application_status"] = record["status"]
+            row["unknown_questions"] = json.loads(record["unknown_questions"] or "[]")
+            row["filled_fields"] = json.loads(record["filled_fields"] or "[]")
+        rows.append(row)
+
+    # First-run leads discovered on earlier days are still included.
+    rows.extend(prepared.values())
+    return rows
+
+
+def track_applications(
+    context: RunContext,
+    database: Database,
+    rows: list[dict[str, Any]],
+    day: date,
+) -> None:
+    """Write the day's review page and one application row per lead."""
+    review_page = create_application_review_page(rows, context.export_directory, day)
     for index, row in enumerate(rows, start=1):
         row["application_progress"] = excel_review_link(review_page, index)
         upsert_application_record(
@@ -296,7 +338,6 @@ def prepare_and_track(
             unknown_questions=row.get("unknown_questions", []),
             filled_fields=row.get("filled_fields", []),
         )
-    return rows
 
 
 # ----------------------------------------------------------------------
@@ -313,6 +354,7 @@ def run(
     today: date | None = None,
 ) -> RunStats:
     stats = RunStats()
+    run_day = today or date.today()
     export_directory = context.export_directory
     export_directory.mkdir(parents=True, exist_ok=True)
 
@@ -328,12 +370,14 @@ def run(
         marker = export_directory / ".daily_exports_initialized"
         leads = new_leads if marker.exists() else matched
 
-        rows = prepare_and_track(context, database, leads)
+        prepared = prepare_applications(context, leads)
+        rows = leads_for_day(database, run_day, prepared)
+        track_applications(context, database, rows, run_day)
 
     export_daily_new_leads(
         rows,
         export_directory,
-        run_date=today,
+        run_date=run_day,
         freshness_windows=context.settings.search.freshness_windows_days,
     )
     export_master_jobs(context.database_path, export_directory)

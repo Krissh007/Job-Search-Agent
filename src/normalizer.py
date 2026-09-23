@@ -87,7 +87,7 @@ class JobNormalizer:
             derive_posted_on(normalized, today)
         )
         normalized.discovered_at = normalized.discovered_at or (
-            datetime.now().isoformat(timespec="seconds")
+            datetime.combine(today, datetime.now().time()).isoformat(timespec="seconds")
         )
         normalized.source = normalized.source.lower()
 

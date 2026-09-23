@@ -117,10 +117,19 @@ def test_pipeline_filters_saves_and_exports(context):
     assert (context.export_directory / "application_review_2026-09-24.html").exists()
 
 
-def test_second_run_exports_no_repeat_leads(context):
+def test_same_day_rerun_keeps_the_days_leads(context):
     run(context, discover=fake_discover(make_jobs()), today=TODAY)
     stats = run(context, discover=fake_discover(make_jobs()), today=TODAY)
 
     assert stats.new == 0
     daily = load_workbook(context.export_directory / "new_leads_7d_2026-09-24.xlsx").active
+    assert daily.max_row == 2
+
+
+def test_next_day_run_exports_no_repeat_leads(context):
+    run(context, discover=fake_discover(make_jobs()), today=TODAY)
+    stats = run(context, discover=fake_discover(make_jobs()), today=date(2026, 9, 25))
+
+    assert stats.new == 0
+    daily = load_workbook(context.export_directory / "new_leads_7d_2026-09-25.xlsx").active
     assert daily.max_row == 1
