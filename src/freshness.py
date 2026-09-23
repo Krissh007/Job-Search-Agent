@@ -35,19 +35,18 @@ def relative_age_days(posted_text: str) -> int | None:
     if not value:
         return None
 
-    if "today" in value or "just posted" in value:
+    if any(term in value for term in ("today", "just posted", "just now", "few hours")):
         return 0
 
-    if re.search(r"\d+\s+(?:hours?|minutes?)\s+ago", value):
+    # Portals write "3+ weeks ago" / "30+ days ago" for older postings; the
+    # number is then a lower bound, which is enough for freshness checks.
+    if re.search(r"\d+\+?\s*(?:hours?|minutes?|mins?)\s+ago", value):
         return 0
 
-    match = re.search(r"(\d+)\s+days?\s+ago", value)
-    if match:
-        return int(match.group(1))
-
-    match = re.search(r"(\d+)\s+weeks?\s+ago", value)
-    if match:
-        return int(match.group(1)) * 7
+    for unit, days in (("days?", 1), ("weeks?", 7), ("months?", 30)):
+        match = re.search(rf"(\d+)\+?\s*{unit}\s+ago", value)
+        if match:
+            return int(match.group(1)) * days
 
     return None
 

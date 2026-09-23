@@ -488,11 +488,13 @@ class NaukriSource(BaseJobSource):
 
     def extract_posted_date(self, card) -> str:
         patterns = [
-            r"just posted",
+            r"just (?:posted|now)",
             r"today",
-            r"\d+\s+hours?\s+ago",
-            r"\d+\s+days?\s+ago",
-            r"\d+\s+weeks?\s+ago",
+            r"few hours? ago",
+            r"\d+\+?\s*(?:hours?|minutes?|mins?)\s+ago",
+            r"\d+\+?\s*days?\s+ago",
+            r"\d+\+?\s*weeks?\s+ago",
+            r"\d+\+?\s*months?\s+ago",
         ]
         text = self.extract_text(
             card,
@@ -513,9 +515,9 @@ class NaukriSource(BaseJobSource):
 
     @staticmethod
     def extract_posted_days(posted_date: str) -> int | None:
-        value = posted_date.lower().strip()
-        if not value:
-            return None
+        from src.freshness import relative_age_days
+
+        return relative_age_days(posted_date)
         if "today" in value or "just posted" in value or "hour" in value:
             return 0
 

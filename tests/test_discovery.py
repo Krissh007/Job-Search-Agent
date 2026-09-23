@@ -30,6 +30,10 @@ SEARCH_HTML = """
     <span class="job-post-day">Just Now</span>
   </div>
   <div class="srp-jobtuple-wrapper">
+    <a class="title" href="/job-listings-old-4">Old Posting</a>
+    <span class="job-post-day">3+ weeks ago</span>
+  </div>
+  <div class="srp-jobtuple-wrapper">
     <a class="title" href="/job-listings-known-job-3">Known Job</a>
   </div>
 </body></html>
@@ -61,7 +65,11 @@ def jobs(tmp_path_factory):
 
 
 def test_reads_every_new_card(jobs):
-    assert [job.title for job in jobs] == ["Business Analyst", "Product Analyst"]
+    assert [job.title for job in jobs] == ["Business Analyst", "Product Analyst", "Old Posting"]
+
+
+def test_posted_age_variants(jobs):
+    assert [job.posted_days for job in jobs] == [3, 0, 21]
 
 
 def test_card_fields(jobs):
