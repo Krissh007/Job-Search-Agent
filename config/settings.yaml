@@ -1,30 +1,39 @@
+# Run settings. Unknown keys are rejected at startup (see src/config.py).
+# Scoring thresholds and gates live in matching_rules.yaml.
+
 project:
   name: job_search_agent
   timezone: Asia/Kolkata
   database_path: data/jobs.db
   export_directory: data/exports
   log_directory: data/logs
+  debug_directory: data/debug
 
 browser:
   headless: false
   default_timeout_ms: 30000
   navigation_timeout_ms: 60000
-  reuse_existing_profile: false
 
 search:
   keywords:
-    - business analyst
+    - AI Business Analyst
+    - AI Product Analyst
+    - Business Analyst
+    - Product Analyst
+    - Associate Product Manager
   locations:
     - Hyderabad
   max_results_per_query: 60
   max_pages_per_source: 10
-  max_posted_days: 30
+  # Jobs older than this are dropped before matching. Unknown ages are kept
+  # in the database but excluded from the freshness workbooks.
+  max_posted_days: 7
+  # One new_leads_<N>d_<date>.xlsx workbook is written per window.
   freshness_windows_days:
     - 7
-    - 30
-  minimum_match_score: 45
-  minimum_evidence_matches: 2
-  india_only: true
+  # Open each job's detail page for the full description. Much slower
+  # (one extra page load per job) but gives far better matching.
+  enrich_details: true
 
 sources:
   - naukri

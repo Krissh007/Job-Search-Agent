@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Any
 
 
+from src.config import load_settings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-DATABASE_PATH = PROJECT_ROOT / "data" / "jobs.db"
-EXPORT_DIRECTORY = PROJECT_ROOT / "data" / "exports"
+_SETTINGS = load_settings(PROJECT_ROOT / "config" / "settings.yaml")
+DATABASE_PATH = PROJECT_ROOT / _SETTINGS.project.database_path
+EXPORT_DIRECTORY = PROJECT_ROOT / _SETTINGS.project.export_directory
 EXPORT_PATH = EXPORT_DIRECTORY / "matched_jobs.csv"
 
 

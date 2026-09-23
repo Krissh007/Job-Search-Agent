@@ -16,14 +16,17 @@ EXPORT_COLUMNS = [
     "title",
     "company",
     "location",
+    "experience",
+    "salary",
     "source",
     "posted_date",
-    "posted_days",
+    "posted_on",
     "freshness_age_days",
     "match_score",
     "match_category",
     "match_reasons",
     "missing_keywords",
+    "search_term",
     "job_url",
     "application_progress",
     "description",
@@ -39,6 +42,20 @@ def _cell_value(value: Any) -> Any:
             f"{key}: {item}" for key, item in value.items()
         )
     return "" if value is None else value
+
+
+def _save_workbook(workbook: Workbook, path: Path) -> Path:
+    """Save, or write a timestamped copy when the file is open in Excel."""
+    try:
+        workbook.save(path)
+        return path
+    except PermissionError:
+        fallback_path = path.with_name(
+            f"{path.stem}_updated_{datetime.now().strftime('%H%M%S')}{path.suffix}"
+        )
+        workbook.save(fallback_path)
+        print(f"{path.name} is locked; wrote fallback file: {fallback_path}")
+        return fallback_path
 
 
 def export_daily_new_leads(
@@ -69,11 +86,11 @@ def export_daily_new_leads(
 
         exported_count = 0
         for job in job_list:
-            if not is_within_freshness(job, window):
+            if not is_within_freshness(job, window, current_date):
                 continue
 
             row = dict(job)
-            row["freshness_age_days"] = posted_age_days(job)
+            row["freshness_age_days"] = posted_age_days(job, current_date)
             worksheet.append(
                 [
                     _cell_value(row.get(column))
@@ -101,19 +118,7 @@ def export_daily_new_leads(
                 get_column_letter(column_index)
             ].width = min(max(len(column_name) + 2, 14), 32)
 
-        try:
-            workbook.save(path)
-        except PermissionError:
-            fallback_path = export_path / (
-                f"new_leads_{window}d_"
-                f"{current_date.isoformat()}_updated_"
-                f"{datetime.now().strftime('%H%M%S')}.xlsx"
-            )
-            workbook.save(fallback_path)
-            path = fallback_path
-            print(
-                f"Original export is locked; wrote fallback file: {path}"
-            )
+        path = _save_workbook(workbook, path)
         output_paths.append(path)
         print(
             f"Excel export completed: {path} "
@@ -134,13 +139,8 @@ def export_master_jobs(
 
     with Database(database_path) as database:
         jobs = database.get_jobs()
-        application_rows = database.connection.execute(
-            "SELECT job_url, review_url, status FROM applications"
-        ).fetchall()
+        application_by_url = database.get_applications()
 
-    application_by_url = {
-        row["job_url"]: row for row in application_rows
-    }
     unique_jobs: dict[str, dict[str, Any]] = {}
     for job in jobs:
         if job.get("status") == "rejected":
@@ -177,6 +177,6 @@ def export_master_jobs(
 
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
-    workbook.save(output_path)
+    output_path = _save_workbook(workbook, output_path)
     print(f"Master Excel export completed: {output_path} ({len(unique_jobs)} jobs)")
     return output_path

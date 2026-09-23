@@ -1,6 +1,7 @@
 playwright
 openpyxl
-python-docx
 PyYAML
-pydantic
+pydantic>=2
 pytest
+streamlit
+pandas

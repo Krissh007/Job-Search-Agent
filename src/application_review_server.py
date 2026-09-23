@@ -8,11 +8,14 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import yaml
 
+from src.config import load_settings
 from src.database import Database
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = PROJECT_ROOT / "config" / "application_profile.yaml"
-DATABASE_PATH = PROJECT_ROOT / "data" / "jobs.db"
+DATABASE_PATH = PROJECT_ROOT / load_settings(
+    PROJECT_ROOT / "config" / "settings.yaml"
+).project.database_path
 
 
 def _load_profile() -> dict:

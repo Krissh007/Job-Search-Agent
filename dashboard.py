@@ -44,11 +44,12 @@ STATUS_ICONS = {
     "error":   "🔴",
 }
 
+# Keys match JobMatcher.category_for().
 CATEGORY_COLORS = {
-    "Strong Match": "#2EAA6E",
-    "Good Match":   "#4A90D9",
-    "Fair Match":   "#E8A838",
-    "Weak Match":   "#D94A4A",
+    "Strong": "#2EAA6E",
+    "Good":   "#4A90D9",
+    "Review": "#E8A838",
+    "Low":    "#D94A4A",
 }
 
 # ── CSS overrides ────────────────────────────────────────────────────────────
@@ -244,7 +245,7 @@ def render_kpis(df: pd.DataFrame):
     applied = (df["status"] == "applied").sum()
     review  = (df["status"] == "review").sum()
     skipped = (df["status"] == "skipped").sum()
-    strong  = (df.get("match_category", "") == "Strong Match").sum()
+    strong  = (df.get("match_category", "") == "Strong").sum()
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("📥 Total Found",   total)
@@ -542,101 +543,6 @@ def tab_job_details(filtered: pd.DataFrame):
     if total > 50:
         st.caption(f"Showing top 50 of {total}. Narrow filters to see others.")
 
-    if False:  # dead block kept so indentation stays valid
-        with st.expander(""):
-
-            # ── Top info row ──────────────────────────────────────────────
-            c1, c2, c3 = st.columns([2, 2, 1])
-            with c1:
-                st.markdown(f"**Company:** {co or '—'}")
-                st.markdown(f"**Location:** {row.get('location','—')}")
-                st.markdown(f"**Source:** {source or '—'}")
-
-                posted = row.get("posted_date", "")
-                st.markdown(f"**Posted:** {posted if posted and str(posted).strip() else '—'}")
-
-                discovered = row.get("discovered_at")
-                if pd.notna(discovered):
-                    st.markdown(f"**Discovered:** {discovered.strftime('%Y-%m-%d %H:%M')}")
-
-            with c2:
-                st.markdown(
-                    f"**Status:** {_badge(status)}",
-                    unsafe_allow_html=True,
-                )
-                st.markdown(f"**Match Category:** {cat or '—'}")
-                applied_at = row.get("applied_at")
-                if pd.notna(applied_at):
-                    st.markdown(f"**Applied On:** {applied_at.strftime('%Y-%m-%d')}")
-                updated_at = row.get("updated_at")
-                if pd.notna(updated_at):
-                    st.markdown(f"**Last Updated:** {updated_at.strftime('%Y-%m-%d %H:%M')}")
-
-                st.markdown("**Match Score:**")
-                st.markdown(_score_bar(score), unsafe_allow_html=True)
-
-            with c3:
-                if url and url.startswith("http"):
-                    # Show source-appropriate label
-                    if source == "naukri":
-                        btn_label = "Apply on Naukri"
-                    elif source == "linkedin":
-                        btn_label = "Apply on LinkedIn"
-                    elif source == "indeed":
-                        btn_label = "Apply on Indeed"
-                    else:
-                        btn_label = "View Job Posting"
-                    st.link_button(btn_label, url, use_container_width=True)
-                    st.caption(f"Opens {source} listing page where you can apply directly.")
-
-            st.markdown("---")
-
-            # ── Match signals ─────────────────────────────────────────────
-            reasons = row.get("match_reasons") or []
-            missing = row.get("missing_keywords") or []
-            if isinstance(reasons, str):
-                reasons = [reasons]
-            if isinstance(missing, str):
-                missing = [missing]
-
-            r1, r2 = st.columns(2)
-            with r1:
-                if reasons:
-                    st.success("**Matched signals:**\n\n" + "\n".join(f"• {r}" for r in reasons))
-                else:
-                    st.info("No match reasons recorded.")
-            with r2:
-                if missing:
-                    st.warning("**Missing keywords:**\n\n" + "\n".join(f"• {m}" for m in missing))
-                else:
-                    st.success("No missing keywords — strong match!")
-
-            # ── Notes ─────────────────────────────────────────────────────
-            notes = row.get("notes", "")
-            if notes and str(notes).strip():
-                st.info(f"**System Notes:** {notes}")
-
-            st.markdown("---")
-
-            # ── Full Job Description ──────────────────────────────────────
-            desc = str(row.get("description", "")).strip()
-            if desc:
-                st.markdown("**Full Job Description**")
-                # Render description as readable markdown-like text, not raw monospace
-                # Break into paragraphs for readability
-                paragraphs = [p.strip() for p in desc.split("\n") if p.strip()]
-                st.markdown(
-                    "<div style='background:#161625;border:1px solid #2A2A3E;"
-                    "border-radius:8px;padding:16px 20px;font-size:0.88rem;"
-                    "line-height:1.7;color:#C8C8E0;max-height:500px;overflow-y:auto'>"
-                    + "<br>".join(p for p in paragraphs[:120])
-                    + ("..." if len(paragraphs) > 120 else "")
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption("No description available for this job.")
-
 
 # ── TAB 3 — Applications ─────────────────────────────────────────────────────
 def tab_applications(jobs_df: pd.DataFrame, apps_df: pd.DataFrame):
@@ -794,7 +700,6 @@ def tab_settings():
         "settings.yaml":         PROJECT_ROOT / "config" / "settings.yaml",
         "candidate_profile.yaml": PROJECT_ROOT / "config" / "candidate_profile.yaml",
         "matching_rules.yaml":    PROJECT_ROOT / "config" / "matching_rules.yaml",
-        "search_profiles.yaml":   PROJECT_ROOT / "config" / "search_profiles.yaml",
     }
 
     for name, path in config_files.items():

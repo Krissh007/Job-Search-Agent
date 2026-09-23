@@ -11,9 +11,12 @@ from src.application_tracking import upsert_application_record
 from src.database import Database
 from src.reports.export_excel import export_master_jobs
 
+from src.config import load_settings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = PROJECT_ROOT / "data" / "jobs.db"
-EXPORT_DIRECTORY = PROJECT_ROOT / "data" / "exports"
+_SETTINGS = load_settings(PROJECT_ROOT / "config" / "settings.yaml")
+DATABASE_PATH = PROJECT_ROOT / _SETTINGS.project.database_path
+EXPORT_DIRECTORY = PROJECT_ROOT / _SETTINGS.project.export_directory
 PROFILE_PATH = PROJECT_ROOT / "config" / "application_profile.yaml"
 
 
@@ -22,7 +25,7 @@ def main() -> None:
         jobs = [
             job
             for job in database.get_jobs()
-            if job.get("status") != "rejected"
+            if job.get("status") not in ("rejected", "skipped", "applied")
         ]
 
     prepared_jobs = prepare_new_applications(

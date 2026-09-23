@@ -1,78 +1,59 @@
+"""
+Re-score every stored job with the current profile and rules.
+
+Run after editing candidate_profile.yaml or matching_rules.yaml:
+    python -m src.reconcile_jobs
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-
-from src.config_manager import ConfigManager
 from src.database import Database
 from src.matching.job_matcher import JobMatcher
+from src.pipelines.discovery_pipeline import load_context
 from src.reports.export_excel import export_master_jobs
-from src.reports.export_excel import export_daily_new_leads
-from src.resume_profile import load_resume_profile
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATABASE_PATH = PROJECT_ROOT / "data" / "jobs.db"
-EXPORT_DIRECTORY = PROJECT_ROOT / "data" / "exports"
+REJECTED_NOTE_PREFIX = "Rejected by quality filters: "
 
 
 def main() -> None:
-    profile = load_resume_profile(
-        PROJECT_ROOT / "config" / "candidate_profile.yaml"
-    )
-    rules = ConfigManager(
-        PROJECT_ROOT / "config" / "matching_rules.yaml"
-    ).all()
-    matcher = JobMatcher(profile, rules)
+    context = load_context()
+    matcher = JobMatcher(context.profile, context.rules)
     rejected = 0
     retained = 0
-    retained_jobs = []
 
-    with Database(DATABASE_PATH) as database:
-        jobs = database.get_jobs()
-        for job in jobs:
+    with Database(context.database_path) as database:
+        for job in database.get_jobs():
             result = matcher.match(job)
-            job.update(result)
-            if result.get("eligible", True):
-                job["status"] = (
-                    "new" if job.get("status") == "rejected" else job.get(
-                        "status",
-                        "new",
-                    )
-                )
-                retained += 1
-                retained_jobs.append(job)
-            else:
-                job["status"] = "rejected"
-                job["notes"] = (
-                    "Rejected by quality filters: "
-                    + "; ".join(result.get("rejection_reasons", []))
-                )
-                rejected += 1
-            database.save_job(job)
-            database.connection.execute(
-                """
-                UPDATE applications
-                SET status = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE job_url = ?
-                """,
-                (
-                    "Rejected by quality filters"
-                    if job["status"] == "rejected"
-                    else "Ready for review",
-                    job.get("job_url", ""),
-                ),
+            job_url = job["job_url"]
+            database.update_job_match(
+                job_url=job_url,
+                match_score=result["match_score"],
+                match_category=result["match_category"],
+                match_reasons=result["match_reasons"],
+                missing_keywords=result["missing_keywords"],
+                rejection_reasons=result["rejection_reasons"],
+                evidence_count=result["evidence_count"],
             )
-        database.connection.commit()
 
-    export_master_jobs(DATABASE_PATH, EXPORT_DIRECTORY)
-    for window in (7, 30):
-        export_daily_new_leads(
-            retained_jobs,
-            EXPORT_DIRECTORY,
-            freshness_windows=(window,),
-        )
+            status = job.get("status") or "new"
+            if not result["eligible"]:
+                rejected += 1
+                # Never overwrite a decision the candidate already made.
+                if status in ("new", "rejected"):
+                    database.update_job_status(
+                        job_url,
+                        "rejected",
+                        REJECTED_NOTE_PREFIX + "; ".join(result["rejection_reasons"]),
+                    )
+            else:
+                retained += 1
+                if status == "rejected":
+                    database.update_job_status(job_url, "new", "")
+
+    export_master_jobs(context.database_path, context.export_directory)
     print(f"Retained jobs: {retained}")
     print(f"Rejected jobs: {rejected}")
-    print("Rejected jobs remain in SQLite history but are not actionable.")
+    print("Rejected jobs remain in SQLite history but are not exported.")
 
 
 if __name__ == "__main__":

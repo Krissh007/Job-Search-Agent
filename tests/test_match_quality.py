@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.config_manager import ConfigManager
+from src.config import load_matching_rules
 from src.matching.job_matcher import JobMatcher
 from src.models import Job
 from src.resume_profile import load_resume_profile
@@ -13,9 +13,9 @@ def create_matcher() -> JobMatcher:
     profile = load_resume_profile(
         PROJECT_ROOT / "config" / "candidate_profile.yaml"
     )
-    rules = ConfigManager(
+    rules = load_matching_rules(
         PROJECT_ROOT / "config" / "matching_rules.yaml"
-    ).all()
+    )
     return JobMatcher(profile, rules)
 
 
@@ -129,7 +129,7 @@ def test_experience_mismatch_is_rejected() -> None:
         },
         {
             "india_only": True,
-            "scoring": {"minimum_evidence_matches": 1},
+            "minimum_evidence_matches": 1,
         },
     )
 

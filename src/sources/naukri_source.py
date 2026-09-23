@@ -30,12 +30,16 @@ class NaukriSource(BaseJobSource):
         location: str = "",
         debug_directory: str = "data/debug",
         config: dict[str, Any] | None = None,
+        enrich_details: bool = False,
     ) -> None:
         super().__init__(config=config)
 
         self.page = page
         self.keyword = keyword
         self.location = location
+        # When True, open each job's detail page to fetch the full description.
+        # This is slow (1 extra page load per job) so it defaults to False.
+        self.enrich_details = enrich_details
 
         self.debug_directory = Path(debug_directory)
         self.debug_directory.mkdir(
@@ -137,10 +141,11 @@ class NaukriSource(BaseJobSource):
         seen_urls: set[str] = set()
         excluded_urls = excluded_urls or set()
         detail_page = None
-        try:
-            detail_page = self.page.context.new_page()
-        except Exception:
-            detail_page = None
+        if self.enrich_details:
+            try:
+                detail_page = self.page.context.new_page()
+            except Exception:
+                detail_page = None
 
         page_number = 1
         while len(jobs) < max_jobs and page_number <= max_pages:
@@ -257,7 +262,7 @@ class NaukriSource(BaseJobSource):
                         posted_date=posted_date,
                         posted_days=self.extract_posted_days(posted_date),
                         salary=salary,
-                        job_type=experience,
+                        experience=experience,
                         search_term=self.keyword,
                         search_location=self.location,
                     )
@@ -428,6 +433,16 @@ class NaukriSource(BaseJobSource):
 
         return ""
 
+    # Job-description containers on Naukri detail pages, most specific first.
+    # The whole <body> is deliberately not used: it includes navigation and
+    # "similar jobs" links whose titles would create false role matches.
+    DETAIL_DESCRIPTION_SELECTORS = [
+        "section[class*='job-desc']",
+        "div[class*='dang-inner-html']",
+        "[class*='JDC']",
+        "div.job-desc",
+    ]
+
     def enrich_job_from_detail(self, page: Page, job: Job) -> None:
         """Enrich card data from the detail page when accessible."""
         try:
@@ -440,7 +455,15 @@ class NaukriSource(BaseJobSource):
             if self.is_blocked_or_login_page_for(page):
                 return
 
-            detail_text = self.clean_text(page.locator("body").inner_text())
+            detail_text = ""
+            for selector in self.DETAIL_DESCRIPTION_SELECTORS:
+                locator = page.locator(selector).first
+                if locator.count() == 0:
+                    continue
+                detail_text = self.clean_text(locator.inner_text(timeout=5_000))
+                if detail_text:
+                    break
+
             if len(detail_text) > len(job.description):
                 job.description = detail_text[:20_000]
         except Exception:
@@ -489,23 +512,22 @@ class NaukriSource(BaseJobSource):
         return ""
 
     @staticmethod
-    def extract_posted_days(posted_date: str) -> str:
+    def extract_posted_days(posted_date: str) -> int | None:
         value = posted_date.lower().strip()
-        if not value or "today" in value or "just posted" in value:
-            return "0" if value else ""
+        if not value:
+            return None
+        if "today" in value or "just posted" in value or "hour" in value:
+            return 0
 
         match = re.search(r"(\d+)\s+days?", value)
         if match:
-            return match.group(1)
+            return int(match.group(1))
 
         match = re.search(r"(\d+)\s+weeks?", value)
         if match:
-            return str(int(match.group(1)) * 7)
+            return int(match.group(1)) * 7
 
-        if "hour" in value:
-            return "0"
-
-        return ""
+        return None
 
     # ------------------------------------------------------------------
     # Access checks

@@ -39,3 +39,9 @@ def test_daily_exports_separate_freshness_windows(tmp_path) -> None:
     assert thirty_day.max_row == 3
     assert seven_day[2][0].value == "Recent"
     assert thirty_day[3][0].value == "Monthly"
+
+
+def test_age_keeps_counting_from_posted_on() -> None:
+    job = {"posted_on": "2026-09-14", "posted_date": "3 days ago"}
+    assert posted_age_days(job, today=date(2026, 9, 24)) == 10
+    assert not is_within_freshness(job, 7, today=date(2026, 9, 24))

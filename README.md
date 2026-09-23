@@ -9,6 +9,46 @@ A modular, configurable job discovery, matching, review, and application-trackin
 - Matching is explainable and configurable.
 - Applications remain human-controlled.
 
+## Running
+
+```powershell
+pip install -r requirements.txt
+playwright install chromium
+python -m src.pipelines.discovery_pipeline
+```
+
+This is the only pipeline. It runs these stages in order: discover → normalize → freshness
+filter → match → save to SQLite → prepare applications → export Excel.
+Each run logs a summary to `data/logs/job_search_agent.log`, including
+how many jobs each gate rejected.
+
+Other commands:
+
+| Command | Purpose |
+| --- | --- |
+| `python -m src.reconcile_jobs` | Re-score stored jobs after editing the profile or rules |
+| `python -m src.prepare_all_applications` | Pre-fill forms for every open job |
+| `python -m src.application_review_server` | Answer screening questions at http://127.0.0.1:8765 |
+| `streamlit run dashboard.py` | Browse the database |
+| `python -m pytest` | Run the tests |
+
+## Configuration
+
+| File | Holds |
+| --- | --- |
+| `config/settings.yaml` | Keywords, locations, limits, sources, run flags |
+| `config/candidate_profile.yaml` | Resume evidence and the experience range (years) |
+| `config/matching_rules.yaml` | Weights, category bands, gates, excluded domains, aliases |
+| `config/application_profile.yaml` | Contact details and screening answers (git-ignored) |
+
+All four are validated at startup by `src/config.py` and
+`src/resume_profile.py`. An unknown or misspelled key stops the run with
+a message naming it, rather than being silently ignored.
+
+Existing databases are migrated automatically. Older rows get
+`posted_on` (resolved from the day they were discovered) and parsed
+experience ranges.
+
 ## Freshness and daily exports
 
 The search pipeline keeps records within the configured 30-day posting
