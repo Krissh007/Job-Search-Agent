@@ -121,11 +121,18 @@ def login(context: RunContext, timeout_minutes: int = 10) -> bool:
 
         deadline = time.monotonic() + timeout_minutes * 60
         while time.monotonic() < deadline:
-            if is_signed_in(browser) and "checkpoint" not in page.url:
+            try:
+                signed_in = is_signed_in(browser)
+                on_checkpoint = "checkpoint" in page.url
+            except Exception:
+                print("The browser window was closed before sign-in finished. Run the command again.")
+                return False
+            if signed_in and not on_checkpoint:
                 print("Signed in. The session is saved in the agent's browser profile.")
-                page.wait_for_timeout(2_000)
+                print("You can close the browser window.")
+                time.sleep(2)
                 return True
-            page.wait_for_timeout(2_000)
+            time.sleep(2)
 
     print("Timed out before sign-in finished. Run the command again.")
     return False
