@@ -9,6 +9,7 @@ Run with:  python -m src.pipelines.discovery_pipeline
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import sys
@@ -23,7 +24,7 @@ from src.application_queue import (
     prepare_new_applications,
 )
 from src.application_tracking import upsert_application_record
-from src.config import MatchingRules, Settings, load_matching_rules, load_settings
+from src.config import MatchingRules, Settings, load_matching_rules, load_settings, validate_model
 from src.database import Database
 from src.freshness import posted_age_days
 from src.matching.job_matcher import JobMatcher
@@ -153,6 +154,7 @@ def discover_jobs(
                     page,
                     enrich_details=search.enrich_details,
                     debug_directory=str(context.path(settings.project.debug_directory)),
+                    posted_within_days=search.max_posted_days,
                 )
                 for keyword in search.keywords:
                     for location in search.locations:
@@ -387,8 +389,41 @@ def run(
     return stats
 
 
-def main() -> None:
+def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Search job portals, score jobs and export the day's leads.",
+    )
+    parser.add_argument(
+        "--sources",
+        nargs="+",
+        help="Override settings.yaml sources for this run, e.g. --sources linkedin",
+    )
+    parser.add_argument(
+        "--keywords",
+        nargs="+",
+        help='Override settings.yaml keywords for this run, e.g. --keywords "Business Analyst"',
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    arguments = parse_arguments(argv)
     context = load_context()
+    # Re-validate so overrides get the same checks as settings.yaml.
+    overrides: dict[str, Any] = {}
+    if arguments.sources:
+        overrides["sources"] = arguments.sources
+    if arguments.keywords:
+        overrides["search"] = {
+            **context.settings.search.model_dump(),
+            "keywords": arguments.keywords,
+        }
+    if overrides:
+        context.settings = validate_model(
+            Settings,
+            {**context.settings.model_dump(), **overrides},
+            "command-line options",
+        )
     configure_logging(context)
     logger.info("Sources: %s", context.settings.sources)
     logger.info("Keywords: %s", context.settings.search.keywords)
