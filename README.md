@@ -49,6 +49,40 @@ Existing databases are migrated automatically. Older rows get
 `posted_on` (resolved from the day they were discovered) and parsed
 experience ranges.
 
+## LinkedIn Easy Apply
+
+Easy Apply runs in the agent's own browser profile (`data/browser_profile/`,
+git-ignored). Sign in once; you type your password in the browser window,
+and the agent never sees it:
+
+```powershell
+python -m src.apply.linkedin login
+```
+
+Then prepare applications for the best LinkedIn leads:
+
+```powershell
+python -m src.apply.linkedin apply              # top 5 with score >= 60
+python -m src.apply.linkedin apply --limit 3 --min-score 70
+python -m src.apply.linkedin apply --job-url https://www.linkedin.com/jobs/view/<id>
+```
+
+For each job, the agent clicks Easy Apply and fills empty fields from
+`config/application_profile.yaml`. For a question such as
+"How many years of experience do you have with SQL?", the longest matching
+`screening_answers` key wins. The agent moves through the steps and stops
+on the final "Submit application" step without clicking it. Tabs that
+need you stay open. Review them, answer anything left blank, and submit
+yourself. When LinkedIn confirms, the job is recorded as applied in
+SQLite. Close the browser when you're done.
+
+Safety limits (`easy_apply` in `settings.yaml`, all optional):
+`max_jobs_per_run` (5), `seconds_between_jobs` (20, randomised),
+`min_match_score` (60). Any sign-in, checkpoint or CAPTCHA page stops the
+run immediately. Automating a signed-in LinkedIn account is against
+LinkedIn's user agreement and can lead to restrictions, so keep batches
+small.
+
 ## Freshness and daily exports
 
 The search pipeline keeps records within the configured 30-day posting

@@ -62,12 +62,28 @@ class ApplicationSettings(_StrictModel):
     max_jobs_per_run: int = Field(10, ge=0)
 
 
+class EasyApplySettings(_StrictModel):
+    """LinkedIn Easy Apply in the agent's own signed-in browser profile."""
+
+    # Holds the LinkedIn session cookies: git-ignored, never share it.
+    browser_profile_dir: str = "data/browser_profile"
+    # "chrome" uses your installed Google Chrome; falls back to Playwright's
+    # Chromium when Chrome is not installed.
+    browser_channel: str = "chrome"
+    min_match_score: int = Field(60, ge=0, le=100)
+    # Small batches keep the account's activity close to a person's.
+    max_jobs_per_run: int = Field(5, ge=1, le=25)
+    seconds_between_jobs: float = Field(20, ge=5)
+    max_steps_per_application: int = Field(8, ge=1)
+
+
 class Settings(_StrictModel):
     project: ProjectSettings = Field(default_factory=ProjectSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     sources: list[str] = Field(default_factory=lambda: ["naukri"])
     application: ApplicationSettings = Field(default_factory=ApplicationSettings)
+    easy_apply: EasyApplySettings = Field(default_factory=EasyApplySettings)
 
     @model_validator(mode="after")
     def _check_sources(self) -> "Settings":

@@ -17,3 +17,6 @@ data/exports/*.html
 data/exports/.daily_exports_initialized
 
 config/application_profile.yaml
+
+# Signed-in browser profile for Easy Apply (session cookies)
+data/browser_profile/
