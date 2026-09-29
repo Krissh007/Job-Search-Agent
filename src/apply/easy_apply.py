@@ -44,7 +44,8 @@ class EasyApplyResult:
 
     @property
     def needs_candidate(self) -> bool:
-        return self.status in (READY_TO_SUBMIT, ANSWERS_NEEDED)
+        # A form the filler could not finish still needs the candidate.
+        return self.status in (READY_TO_SUBMIT, ANSWERS_NEEDED, STOPPED)
 
 
 def build_answers(application_profile: dict[str, Any]) -> dict[str, str]:
@@ -114,8 +115,9 @@ class EasyApplyFiller:
             return EasyApplyResult(NOT_EASY_APPLY)
 
         button.click()
-        dialog = self.page.get_by_role("dialog").last
-        dialog.wait_for(state="visible", timeout=10_000)
+        dialog = self._application_dialog()
+        if dialog is None:
+            return EasyApplyResult(STOPPED)
 
         result = EasyApplyResult(STOPPED)
         for step in range(1, self.max_steps + 1):
@@ -233,6 +235,29 @@ class EasyApplyFiller:
     # ------------------------------------------------------------------
     # Page helpers
     # ------------------------------------------------------------------
+
+    def _application_dialog(self, timeout_ms: int = 10_000) -> Locator | None:
+        """
+        The dialog holding the application form. LinkedIn often has other
+        dialogs open at the same time (promotions, empty overlays), so pick
+        the visible one that has a Next, Review or Submit button.
+        """
+        waited = 0
+        while waited <= timeout_ms:
+            for dialog in self.page.get_by_role("dialog").all():
+                try:
+                    if not dialog.is_visible():
+                        continue
+                except Exception:
+                    continue
+                if any(
+                    self._button(dialog, pattern) is not None
+                    for pattern in (SUBMIT_BUTTON, REVIEW_BUTTON, NEXT_BUTTON)
+                ):
+                    return dialog
+            self.page.wait_for_timeout(500)
+            waited += 500
+        return None
 
     def _body_text(self) -> str:
         try:

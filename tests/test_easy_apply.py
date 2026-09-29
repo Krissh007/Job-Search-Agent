@@ -35,6 +35,7 @@ JOB_PAGE = """
   <h1>Business Analyst</h1>
   <button id="easy" aria-label="Easy Apply to Business Analyst at Acme">Easy Apply</button>
 </main>
+<div role="dialog" id="promo">Try Premium</div>
 <div role="dialog" id="dialog" style="display:none">
   <div class="step" data-step="1">
     <label for="first">First name</label><input id="first" required>
@@ -60,7 +61,11 @@ JOB_PAGE = """
 </div>
 <script>
   window.submitted = false;
-  document.getElementById('easy').onclick = () => { document.getElementById('dialog').style.display = 'block'; };
+  document.getElementById('easy').onclick = () => {
+    document.getElementById('dialog').style.display = 'block';
+    // LinkedIn adds an empty overlay dialog after the form (Sep 2026).
+    document.body.insertAdjacentHTML('beforeend', '<div role="dialog" id="overlay"></div>');
+  };
   document.querySelectorAll('.next').forEach(button => button.onclick = () => {
     const step = button.closest('.step');
     const missing = [...step.querySelectorAll('[required]')].filter(input => !input.value);
