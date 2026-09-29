@@ -146,3 +146,19 @@ def test_longest_matching_answer_wins():
     assert answer_for("Years of experience with SQL?", answers) == "3"
     assert answer_for("Years of experience in banking?", answers) == "4"
     assert answer_for("Visa sponsorship?", answers) == ""
+
+
+def test_unlinked_and_aria_labelled_questions_are_found(browser):
+    html = """
+    <main><button>Easy Apply</button></main>
+    <div role="dialog">
+      <div><label>What is your notice period?</label><div><input id="n" required></div></div>
+      <span id="q">Total years of experience?</span><input aria-labelledby="q" id="y" required>
+      <button aria-label="Submit application">Submit application</button>
+    </div>
+    """
+    page, result = run(browser, html)
+
+    assert result.status == READY_TO_SUBMIT
+    assert page.locator("#n").input_value() == "30"
+    assert page.locator("#y").input_value() == "4"

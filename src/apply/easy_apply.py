@@ -292,9 +292,24 @@ class EasyApplyFiller:
         aria = control.get_attribute("aria-label") or ""
         if aria:
             return cls._clean(aria)
+        labelled_by = (control.get_attribute("aria-labelledby") or "").split()
+        texts = []
+        for element_id in labelled_by:
+            element = scope.page.locator(f"[id='{element_id}']")
+            if element.count():
+                texts.append(cls._clean(element.first.inner_text()))
+        if any(texts):
+            return " ".join(text for text in texts if text)
         wrapping = control.locator("xpath=ancestor::label[1]")
         if wrapping.count():
             return cls._clean(wrapping.first.inner_text())
+        # LinkedIn's newer forms put the question in a label that is not
+        # linked to its input; use the nearest container holding one.
+        container = control.locator("xpath=ancestor::*[.//label or .//legend][1]")
+        if container.count():
+            label = container.first.locator("label, legend").first
+            if label.count():
+                return cls._clean(label.inner_text())
         return ""
 
     @staticmethod
