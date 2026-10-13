@@ -6,11 +6,26 @@ from playwright.sync_api import sync_playwright
 from src.application_assistant import EasyApplyAssistant
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PROFILE_PATH = PROJECT_ROOT / "config" / "application_profile.yaml"
+# A sample profile, so the tests never depend on the candidate's own
+# (git-ignored) config/application_profile.yaml.
+SAMPLE_PROFILE = """
+contact:
+  full_name: Test Candidate
+  email: ""
+  current_location: Hyderabad, India
+screening_answers:
+  work authorization: "Yes"
+"""
 
 
-def test_prepare_fills_known_fields_and_blocks_unknown_questions() -> None:
+@pytest.fixture
+def profile_path(tmp_path: Path) -> Path:
+    path = tmp_path / "application_profile.yaml"
+    path.write_text(SAMPLE_PROFILE, encoding="utf-8")
+    return path
+
+
+def test_prepare_fills_known_fields_and_blocks_unknown_questions(profile_path: Path) -> None:
     html = """
     <form>
       <input name="email" placeholder="Email">
@@ -24,7 +39,7 @@ def test_prepare_fills_known_fields_and_blocks_unknown_questions() -> None:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content(html)
-        assistant = EasyApplyAssistant(page, PROFILE_PATH)
+        assistant = EasyApplyAssistant(page, profile_path)
 
         review = assistant.prepare()
 
@@ -42,7 +57,7 @@ def test_prepare_fills_known_fields_and_blocks_unknown_questions() -> None:
         browser.close()
 
 
-def test_submit_requires_explicit_confirmation() -> None:
+def test_submit_requires_explicit_confirmation(profile_path: Path) -> None:
     html = """
     <form onsubmit="event.preventDefault(); document.title='submitted';">
       <input name="known_answer" placeholder="work authorization">
@@ -54,7 +69,7 @@ def test_submit_requires_explicit_confirmation() -> None:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content(html)
-        assistant = EasyApplyAssistant(page, PROFILE_PATH)
+        assistant = EasyApplyAssistant(page, profile_path)
         review = assistant.prepare()
 
         with pytest.raises(PermissionError):
