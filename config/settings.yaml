@@ -1,11 +1,12 @@
-# Run settings. Unknown keys are rejected at startup (see src/config.py).
+# Search engine settings. Unknown keys are rejected at startup (see src/config.py).
 # Scoring thresholds and gates live in matching_rules.yaml.
+# JobPilot runs this engine and passes its own keywords and sources (Settings
+# screen), so those two lists only apply to a dry run of this repo.
 
 project:
   name: job_search_agent
   timezone: Asia/Kolkata
   database_path: data/jobs.db
-  export_directory: data/exports
   log_directory: data/logs
   debug_directory: data/debug
 
@@ -25,12 +26,9 @@ search:
     - Hyderabad
   max_results_per_query: 60
   max_pages_per_source: 10
-  # Jobs older than this are dropped before matching. Unknown ages are kept
-  # in the database but excluded from the freshness workbooks.
+  # Jobs older than this are dropped before matching. Jobs whose age the
+  # portal doesn't show are kept.
   max_posted_days: 7
-  # One new_leads_<N>d_<date>.xlsx workbook is written per window.
-  freshness_windows_days:
-    - 7
   # Open each job's detail page for the full description. Much slower
   # (one extra page load per job) but gives far better matching.
   enrich_details: true
@@ -39,14 +37,8 @@ sources:
   - naukri
   - linkedin
 
-application:
-  prepare_after_search: true
-  max_jobs_per_run: 10
-
-# Tailored resume + cover letter (.docx) for every job scoring at or above
-# min_match_score. Needs a free Gemini key in GEMINI_API_KEY (env var or a
-# line in the project's .env file) and your original resume at
-# master_resume_path. Only facts from that resume are used.
+# Tailored resume + cover letter settings for src/tailoring, which JobPilot's
+# docs step uses. Only facts from the master resume are used.
 tailoring:
   enabled: true
   min_match_score: 60
@@ -60,28 +52,10 @@ tailoring:
   max_jobs_per_run: 15
   seconds_between_requests: 6
 
-# LinkedIn Easy Apply pacing (shared by manual and auto-apply).
-easy_apply:
-  min_match_score: 60
-  max_jobs_per_run: 5
-  seconds_between_jobs: 25
-
-# Unattended applying (python -m src.daily / python -m src.apply.auto_apply).
-# Submits only fully answered forms for jobs marked "shortlisted" in the
-# Claude project review. Sign in once first:
-#   python -m src.apply.linkedin login
-#   python -m src.apply.naukri login
-auto_apply:
-  enabled: false
-  sources:
-    - linkedin
-    - naukri
-  shortlisted_only: true
-  min_match_score: 60
-  daily_cap: 10
-
-# Mon-Fri 08:30 re-upload to LinkedIn (python -m src.apply.linkedin_resume).
-# Replace this file whenever you update your resume; the next run uploads it.
+# Re-upload your resume to LinkedIn: python -m src.apply.linkedin_resume
+# (not scheduled; run it after replacing this file). The signed-in browser
+# profile it uses is set by easy_apply.browser_profile_dir (default
+# data/browser_profile), shared with JobPilot's apply agent.
 resume_upload:
   enabled: true
   file: config/Krishna_Maheswaram_AI_Business_Analyst_Resume.docx

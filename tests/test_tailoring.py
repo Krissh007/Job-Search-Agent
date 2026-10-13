@@ -8,13 +8,10 @@ from pathlib import Path
 
 import pytest
 from docx import Document
-from openpyxl import load_workbook
 
-from src.config import TailoringSettings, load_matching_rules, load_settings
+from src.config import TailoringSettings
 from src.database import Database
 from src.models import Job
-from src.pipelines.discovery_pipeline import RunContext, run
-from src.resume_profile import load_resume_profile
 from src.tailoring.generator import DocumentGenerator, GenerationResult
 from src.tailoring.llm import GeminiClient, LLMError, parse_json_text
 from src.tailoring.master_resume import MasterResumeError, load_master_resume
@@ -312,47 +309,3 @@ def test_load_master_resume_docx_and_missing(tmp_path):
 
     with pytest.raises(MasterResumeError):
         load_master_resume(tmp_path / "missing.docx")
-
-
-# ----------------------------------------------------------------------
-# Pipeline + Excel
-# ----------------------------------------------------------------------
-
-
-def test_pipeline_links_documents_in_excel(tmp_path):
-    resume_path = tmp_path / "master.txt"
-    resume_path.write_text(MASTER_RESUME, encoding="utf-8")
-
-    app_settings = load_settings(PROJECT_ROOT / "config" / "settings.yaml")
-    app_settings.project.database_path = str(tmp_path / "jobs.db")
-    app_settings.project.export_directory = str(tmp_path / "exports")
-    app_settings.project.log_directory = str(tmp_path / "logs")
-    app_settings.application.prepare_after_search = False
-    app_settings.tailoring = settings(tmp_path, master_resume_path=str(resume_path), min_match_score=0)
-    context = RunContext(
-        project_root=tmp_path,
-        settings=app_settings,
-        rules=load_matching_rules(PROJECT_ROOT / "config" / "matching_rules.yaml"),
-        profile=load_resume_profile(PROJECT_ROOT / "config" / "candidate_profile.yaml"),
-    )
-    job = Job(
-        title="AI Business Analyst",
-        company="Fresh Fit",
-        location="Hyderabad",
-        job_url="https://example.com/jobs/fresh-fit",
-        source="naukri",
-        experience="3-5 Yrs",
-        posted_date="2 days ago",
-        description=GOOD_DESCRIPTION,
-    )
-
-    run(context, discover=lambda ctx, known, stats: [job], today=TODAY, llm_client=FakeClient())
-
-    for name in ("new_leads_7d_2026-09-24.xlsx", "master_jobs.xlsx"):
-        sheet = load_workbook(tmp_path / "exports" / name).active
-        headers = [cell.value for cell in sheet[1]]
-        cell = sheet.cell(row=2, column=headers.index("tailored_resume") + 1)
-        assert cell.value.endswith(".docx")
-        assert cell.hyperlink.target.startswith("file:")
-        letter = sheet.cell(row=2, column=headers.index("cover_letter") + 1)
-        assert "Cover_Letter" in letter.value

@@ -26,7 +26,6 @@ class ProjectSettings(_StrictModel):
     name: str = "job_search_agent"
     timezone: str = "Asia/Kolkata"
     database_path: str = "data/jobs.db"
-    export_directory: str = "data/exports"
     log_directory: str = "data/logs"
     debug_directory: str = "data/debug"
 
@@ -43,7 +42,6 @@ class SearchSettings(_StrictModel):
     max_results_per_query: int = Field(60, gt=0)
     max_pages_per_source: int = Field(10, gt=0)
     max_posted_days: int = Field(7, ge=0)
-    freshness_windows_days: list[int] = Field(default_factory=lambda: [7])
     enrich_details: bool = False
 
     @model_validator(mode="after")
@@ -52,14 +50,7 @@ class SearchSettings(_StrictModel):
             raise ValueError("search.keywords must list at least one keyword")
         if not self.locations:
             raise ValueError("search.locations must list at least one location")
-        if not self.freshness_windows_days:
-            raise ValueError("search.freshness_windows_days must not be empty")
         return self
-
-
-class ApplicationSettings(_StrictModel):
-    prepare_after_search: bool = False
-    max_jobs_per_run: int = Field(10, ge=0)
 
 
 class TailoringSettings(_StrictModel):
@@ -87,43 +78,13 @@ class TailoringSettings(_StrictModel):
 
 
 class EasyApplySettings(_StrictModel):
-    """LinkedIn Easy Apply in the agent's own signed-in browser profile."""
+    """The agent's own signed-in browser profile (LinkedIn and Naukri sign-in)."""
 
     # Holds the LinkedIn session cookies: git-ignored, never share it.
     browser_profile_dir: str = "data/browser_profile"
     # "chrome" uses your installed Google Chrome; falls back to Playwright's
     # Chromium when Chrome is not installed.
     browser_channel: str = "chrome"
-    min_match_score: int = Field(60, ge=0, le=100)
-    # Small batches keep the account's activity close to a person's.
-    max_jobs_per_run: int = Field(5, ge=1, le=25)
-    seconds_between_jobs: float = Field(20, ge=5)
-    max_steps_per_application: int = Field(8, ge=1)
-
-
-class AutoApplySettings(_StrictModel):
-    """
-    Unattended applying (python -m src.apply.auto_apply, run by src.daily).
-    Submits only forms that are completely answered from
-    application_profile.yaml; anything with an unknown question is left
-    unsubmitted and its questions go to project_sync/open_questions.md.
-    """
-
-    enabled: bool = False
-    # Portals to apply on, in order.
-    sources: list[str] = Field(default_factory=lambda: ["linkedin", "naukri"])
-    # Only jobs Claude/you marked "shortlisted" in the project sync.
-    shortlisted_only: bool = True
-    min_match_score: int = Field(60, ge=0, le=100)
-    # Submissions per calendar day across all portals.
-    daily_cap: int = Field(10, ge=0, le=50)
-
-    @model_validator(mode="after")
-    def _check_sources(self) -> "AutoApplySettings":
-        unknown = [name for name in self.sources if name not in ("linkedin", "naukri")]
-        if unknown:
-            raise ValueError(f"auto_apply.sources: unsupported {unknown}; use linkedin, naukri")
-        return self
 
 
 class ResumeUploadSettings(_StrictModel):
@@ -141,9 +102,7 @@ class Settings(_StrictModel):
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
     search: SearchSettings = Field(default_factory=SearchSettings)
     sources: list[str] = Field(default_factory=lambda: ["naukri"])
-    application: ApplicationSettings = Field(default_factory=ApplicationSettings)
     easy_apply: EasyApplySettings = Field(default_factory=EasyApplySettings)
-    auto_apply: AutoApplySettings = Field(default_factory=AutoApplySettings)
     resume_upload: ResumeUploadSettings = Field(default_factory=ResumeUploadSettings)
     tailoring: TailoringSettings = Field(default_factory=TailoringSettings)
 

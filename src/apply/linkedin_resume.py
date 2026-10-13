@@ -5,8 +5,8 @@ copy LinkedIn attaches to Easy Apply is always the latest file.
     python -m src.apply.linkedin_resume              # upload now
     python -m src.apply.linkedin_resume --dry-run    # only check the file and sign-in
 
-Scheduled Mon-Fri 08:30 by scripts/register_daily_tasks.ps1. Uses the
-agent's signed-in browser profile (python -m src.apply.linkedin login).
+Not scheduled: run it after updating your resume. Uses the agent's
+signed-in browser profile (python -m src.apply.linkedin login).
 
 After a confirmed upload, older copies of the same file name are deleted
 (LinkedIn keeps at most a few resumes). Older copies are only deleted when
@@ -32,7 +32,6 @@ from src.apply.linkedin import (
     signed_in_browser,
 )
 from src.pipelines.discovery_pipeline import RunContext, configure_logging, load_context
-from src.project_sync import sync_directory
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +159,8 @@ def upload(page: Page, path: Path, today: date | None = None, keep_only_latest: 
 
 
 def write_status(context: RunContext, ok: bool, message: str) -> None:
-    out = sync_directory(context.project_root)
+    # JARVIS reads this file for "did my resume upload work?".
+    out = context.project_root / "project_sync"
     out.mkdir(parents=True, exist_ok=True)
     (out / "resume_upload_status.md").write_text(
         f"# LinkedIn resume re-upload\n\n- Last run: {datetime.now():%Y-%m-%d %H:%M}\n"

@@ -4,7 +4,7 @@ Naukri one-click apply in the agent's own signed-in browser profile.
 One-time sign-in (you type your password; the agent never sees it):
     python -m src.apply.naukri login
 
-Unattended applying is run by ``python -m src.apply.auto_apply``.
+Applying is run by JobPilot, which reuses NaukriApplier and the selectors below.
 
 How Naukri applies: on a job page, the "Apply" button submits your Naukri
 profile straight away. Some employers add a chatbot with screening
@@ -21,7 +21,6 @@ recorded as applied unless Naukri shows its own confirmation.
 from __future__ import annotations
 
 import logging
-import random
 import re
 import sys
 import time
@@ -30,8 +29,6 @@ from typing import Any
 from playwright.sync_api import BrowserContext, Locator, Page
 
 from src.apply.easy_apply import EasyApplyResult, answer_for
-from src.application_tracking import upsert_application_record
-from src.database import Database
 from src.pipelines.discovery_pipeline import RunContext, configure_logging, load_context
 
 logger = logging.getLogger(__name__)
@@ -201,59 +198,6 @@ class NaukriApplier:
             option.check(force=True)
 
 
-def record(database: Database, job: dict[str, Any], result: EasyApplyResult) -> None:
-    upsert_application_record(
-        database, job, review_url=job["job_url"], status=result.status,
-        unknown_questions=result.unknown_questions, filled_fields=result.filled_fields,
-    )
-    if result.status in (SUBMITTED, ALREADY_APPLIED):
-        database.update_job_status(job["job_url"], "applied", notes=f"Naukri apply: {result.status}")
-
-
-DONE_STATUSES = (SUBMITTED, ALREADY_APPLIED, EXTERNAL)
-
-
-def auto_apply_jobs(
-    context: RunContext,
-    database: Database,
-    browser: BrowserContext,
-    jobs: list[dict[str, Any]],
-    answers: dict[str, str],
-    budget: int,
-) -> list[tuple[dict[str, Any], EasyApplyResult]]:
-    pause = context.settings.easy_apply.seconds_between_jobs
-    results: list[tuple[dict[str, Any], EasyApplyResult]] = []
-    submitted = 0
-    for index, job in enumerate(jobs):
-        if submitted >= budget:
-            logger.info("Naukri auto-apply: daily cap reached")
-            break
-        if index:
-            time.sleep(pause * random.uniform(0.8, 1.4))
-        page = browser.new_page()
-        try:
-            page.goto(job["job_url"], wait_until="domcontentloaded")
-            page.wait_for_timeout(3_000)
-            result = NaukriApplier(page, answers).apply()
-        except NaukriSecurityError:
-            page.close()
-            raise
-        except Exception as error:
-            logger.exception("Naukri auto-apply failed for %s", job["job_url"])
-            result = EasyApplyResult(f"Failed: {error}"[:200])
-        record(database, job, result)
-        logger.info("Naukri auto-apply | %s | %s | %s | questions: %s", result.status,
-                    job.get("title"), job.get("company"), "; ".join(result.unknown_questions) or "none")
-        results.append((job, result))
-        page.close()
-        if result.status == SUBMITTED:
-            submitted += 1
-        if result.status == NOT_SIGNED_IN:
-            logger.warning("Naukri session expired; stopping. Run: python -m src.apply.naukri login")
-            break
-    return results
-
-
 def login(context: RunContext, timeout_minutes: int = 10) -> bool:
     from src.apply.linkedin import signed_in_browser
 
@@ -282,7 +226,7 @@ def login(context: RunContext, timeout_minutes: int = 10) -> bool:
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if args != ["login"]:
-        raise SystemExit("Usage: python -m src.apply.naukri login   (applying: python -m src.apply.auto_apply)")
+        raise SystemExit("Usage: python -m src.apply.naukri login   (applying is done from JobPilot)")
     context = load_context()
     configure_logging(context)
     sys.exit(0 if login(context) else 1)

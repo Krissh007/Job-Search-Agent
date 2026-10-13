@@ -1,9 +1,6 @@
 from datetime import date
 
-from openpyxl import load_workbook
-
 from src.freshness import is_within_freshness, posted_age_days
-from src.reports.export_excel import export_daily_new_leads
 
 
 def test_posted_age_parses_relative_values() -> None:
@@ -13,32 +10,10 @@ def test_posted_age_parses_relative_values() -> None:
     assert posted_age_days({"posted_date": "unknown"}) is None
 
 
-def test_daily_exports_separate_freshness_windows(tmp_path) -> None:
-    jobs = [
-        {"title": "Recent", "posted_days": "3", "job_url": "1"},
-        {"title": "Monthly", "posted_days": "10", "job_url": "2"},
-        {"title": "Stale", "posted_days": "31", "job_url": "3"},
-        {"title": "Unknown", "posted_days": "", "job_url": "4"},
-    ]
-
-    assert is_within_freshness(jobs[0], 7)
-    assert not is_within_freshness(jobs[2], 30)
-    assert not is_within_freshness(jobs[3], 30)
-
-    paths = export_daily_new_leads(
-        jobs,
-        tmp_path,
-        run_date=date(2026, 9, 17),
-        freshness_windows=(7, 30),
-    )
-
-    seven_day = load_workbook(paths[0]).active
-    thirty_day = load_workbook(paths[1]).active
-
-    assert seven_day.max_row == 2
-    assert thirty_day.max_row == 3
-    assert seven_day[2][0].value == "Recent"
-    assert thirty_day[3][0].value == "Monthly"
+def test_freshness_window_needs_a_known_age() -> None:
+    assert is_within_freshness({"posted_days": "3"}, 7)
+    assert not is_within_freshness({"posted_days": "31"}, 30)
+    assert not is_within_freshness({"posted_days": ""}, 30)
 
 
 def test_age_keeps_counting_from_posted_on() -> None:

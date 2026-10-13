@@ -1,18 +1,16 @@
 """
-End-to-end test of the pipeline stages with a fake discoverer, so no
-browser or network is needed.
+The search engine (discover -> score) with a fake discoverer, so no browser
+or network is needed. JobPilot calls these same functions through its shim.
 """
 
 from datetime import date
 from pathlib import Path
 
 import pytest
-from openpyxl import load_workbook
 
 from src.config import load_matching_rules, load_settings
-from src.database import Database
 from src.models import Job
-from src.pipelines.discovery_pipeline import RunContext, run
+from src.pipelines.discovery_pipeline import RunContext, RunStats, run, score_jobs
 from src.resume_profile import load_resume_profile
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -73,9 +71,7 @@ def make_jobs() -> list[Job]:
 def context(tmp_path) -> RunContext:
     settings = load_settings(PROJECT_ROOT / "config" / "settings.yaml")
     settings.project.database_path = str(tmp_path / "jobs.db")
-    settings.project.export_directory = str(tmp_path / "exports")
     settings.project.log_directory = str(tmp_path / "logs")
-    settings.application.prepare_after_search = False
     return RunContext(
         project_root=PROJECT_ROOT,
         settings=settings,
@@ -93,43 +89,26 @@ def fake_discover(jobs):
     return discover
 
 
-def test_pipeline_filters_saves_and_exports(context):
-    stats = run(context, discover=fake_discover(make_jobs()), today=TODAY)
+def test_score_jobs_drops_stale_and_ineligible_jobs(context):
+    stats = RunStats()
+    matched = score_jobs(make_jobs(), context, stats, today=TODAY)
 
-    assert stats.discovered == 4
     assert stats.stale == 1
     assert stats.rejected == 2
-    assert stats.new == 1
-
-    with Database(context.database_path) as database:
-        saved = database.get_jobs()
-    assert [job["company"] for job in saved] == ["Fresh Fit"]
-    assert saved[0]["experience_min"] == 3
-    assert saved[0]["posted_on"] == "2026-09-22"
-
-    daily = load_workbook(context.export_directory / "new_leads_7d_2026-09-24.xlsx").active
-    header = [cell.value for cell in daily[1]]
-    assert daily.max_row == 2
-    assert daily[2][header.index("company")].value == "Fresh Fit"
-    assert daily[2][header.index("experience")].value == "3-5 Yrs"
-
-    assert (context.export_directory / "master_jobs.xlsx").exists()
-    assert (context.export_directory / "application_review_2026-09-24.html").exists()
+    assert [job.company for job in matched] == ["Fresh Fit"]
+    job = matched[0]
+    assert job.experience_min == 3 and job.posted_on == "2026-09-22"
+    assert job.eligible and job.match_score >= 45 and job.match_reasons
 
 
-def test_same_day_rerun_keeps_the_days_leads(context):
-    run(context, discover=fake_discover(make_jobs()), today=TODAY)
-    stats = run(context, discover=fake_discover(make_jobs()), today=TODAY)
+def test_dry_run_skips_known_urls_and_saves_nothing(context, tmp_path):
+    stats, matched = run(
+        context,
+        discover=fake_discover(make_jobs()),
+        known_urls={"https://example.com/jobs/fresh-fit"},
+        today=TODAY,
+    )
 
-    assert stats.new == 0
-    daily = load_workbook(context.export_directory / "new_leads_7d_2026-09-24.xlsx").active
-    assert daily.max_row == 2
-
-
-def test_next_day_run_exports_no_repeat_leads(context):
-    run(context, discover=fake_discover(make_jobs()), today=TODAY)
-    stats = run(context, discover=fake_discover(make_jobs()), today=date(2026, 9, 25))
-
-    assert stats.new == 0
-    daily = load_workbook(context.export_directory / "new_leads_7d_2026-09-25.xlsx").active
-    assert daily.max_row == 1
+    assert stats.discovered == 3
+    assert matched == []
+    assert not (tmp_path / "jobs.db").exists()

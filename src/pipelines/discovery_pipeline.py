@@ -1,17 +1,17 @@
 """
-The single job-search pipeline.
+The job search engine: discover -> normalize -> freshness filter -> match.
 
-    discover -> normalize -> freshness filter -> match -> save
-             -> tailor resume + cover letter (score >= threshold)
-             -> prepare applications -> export
+JobPilot (E:/JobPilot) runs discover_jobs() and score_jobs() through its legacy
+shim and saves, scores, tailors and applies on its side. Running this module
+directly is a dry run that prints the matches and saves nothing:
 
-Run with:  python -m src.pipelines.discovery_pipeline
+    python -m src.pipelines.discovery_pipeline
+    python -m src.pipelines.discovery_pipeline --sources linkedin --keywords "Business Analyst"
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from dataclasses import dataclass, field
@@ -19,28 +19,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from src.application_queue import (
-    create_application_review_page,
-    excel_review_link,
-    prepare_new_applications,
-)
-from src.application_tracking import upsert_application_record
 from src.config import MatchingRules, Settings, load_matching_rules, load_settings, validate_model
-from src.database import Database
 from src.freshness import posted_age_days
 from src.matching.job_matcher import JobMatcher
 from src.models import Job
 from src.normalizer import JobNormalizer
-from src.project_sync import sync_project
-from src.reports.export_excel import (
-    attach_tailored_documents,
-    export_daily_new_leads,
-    export_master_jobs,
-)
 from src.resume_profile import ResumeProfile, load_resume_profile
-from src.tailoring.generator import DocumentGenerator, GenerationResult
-from src.tailoring.llm import LLMClient, LLMError, create_client
-from src.tailoring.master_resume import MasterResumeError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,10 +50,6 @@ class RunContext:
     @property
     def database_path(self) -> Path:
         return self.path(self.settings.project.database_path)
-
-    @property
-    def export_directory(self) -> Path:
-        return self.path(self.settings.project.export_directory)
 
     @property
     def application_profile_path(self) -> Path:
@@ -251,158 +231,7 @@ def score_jobs(
 
 
 # ----------------------------------------------------------------------
-# Stage 3: save
-# ----------------------------------------------------------------------
-
-
-def save_jobs(database: Database, jobs: Iterable[Job], stats: RunStats) -> list[Job]:
-    """Upsert jobs; return the ones that were not in the database before."""
-    new_leads: list[Job] = []
-    for job in jobs:
-        if not job.job_url:
-            stats.failed_saves += 1
-            continue
-        try:
-            inserted = database.save_job(job)
-        except Exception:
-            stats.failed_saves += 1
-            logger.exception("Could not save job: %s", job.title)
-            continue
-        if inserted:
-            stats.new += 1
-            new_leads.append(job)
-        else:
-            stats.updated += 1
-    return new_leads
-
-
-# ----------------------------------------------------------------------
-# Stage 4: tailored resume + cover letter for high-scoring jobs
-# ----------------------------------------------------------------------
-
-
-def profile_evidence(profile: ResumeProfile) -> list[str]:
-    """Skills you listed in candidate_profile.yaml also count as evidence."""
-    return [
-        *profile.proven_skills,
-        *profile.tools_technologies,
-        *profile.responsibilities,
-        *profile.industries,
-    ]
-
-
-def build_document_generator(
-    context: RunContext,
-    client: LLMClient | None = None,
-) -> DocumentGenerator | None:
-    """Return a generator, or None (with a logged reason) when not set up."""
-    tailoring = context.settings.tailoring
-    if not tailoring.enabled:
-        return None
-    try:
-        return DocumentGenerator(
-            tailoring,
-            context.project_root,
-            client or create_client(tailoring, context.project_root),
-            extra_evidence=profile_evidence(context.profile),
-        )
-    except (LLMError, MasterResumeError) as error:
-        logger.warning("Tailored documents skipped: %s", error)
-        return None
-
-
-def tailor_documents(
-    context: RunContext,
-    database: Database,
-    jobs: Iterable[dict[str, Any]],
-    client: LLMClient | None = None,
-) -> GenerationResult | None:
-    generator = build_document_generator(context, client)
-    if generator is None:
-        return None
-    result = generator.generate(database, jobs)
-    result.log_summary()
-    return result
-
-
-# ----------------------------------------------------------------------
-# Stage 5: prepare applications and track them
-# ----------------------------------------------------------------------
-
-
-def prepare_applications(context: RunContext, leads: list[Job]) -> list[dict[str, Any]]:
-    """Optionally pre-fill forms for this run's new leads."""
-    rows = [lead.to_dict() for lead in leads]
-    application = context.settings.application
-    if application.prepare_after_search and rows:
-        rows = prepare_new_applications(
-            rows,
-            profile_path=context.application_profile_path,
-            max_jobs=application.max_jobs_per_run,
-        )
-    return rows
-
-
-def leads_for_day(
-    database: Database,
-    day: date,
-    prepared_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """
-    Every non-rejected job first discovered on ``day``, so a second run on
-    the same day adds to that day's workbook and review page instead of
-    replacing them. This run's preparation results override stored ones.
-    """
-    prepared = {row["job_url"]: row for row in prepared_rows}
-    applications = database.get_applications()
-    documents = database.get_tailored_documents()
-    day_prefix = day.isoformat()
-
-    rows: list[dict[str, Any]] = []
-    for job in reversed(database.get_jobs()):  # oldest first
-        url = job["job_url"]
-        if url in prepared:
-            rows.append({**job, **prepared.pop(url)})
-            continue
-        if not str(job.get("discovered_at") or "").startswith(day_prefix):
-            continue
-        if job.get("status") == "rejected":
-            continue
-        row = dict(job)
-        record = applications.get(url)
-        if record:
-            row["application_status"] = record["status"]
-            row["unknown_questions"] = json.loads(record["unknown_questions"] or "[]")
-            row["filled_fields"] = json.loads(record["filled_fields"] or "[]")
-        rows.append(row)
-
-    # First-run leads discovered on earlier days are still included.
-    rows.extend(prepared.values())
-    return [attach_tailored_documents(row, documents) for row in rows]
-
-
-def track_applications(
-    context: RunContext,
-    database: Database,
-    rows: list[dict[str, Any]],
-    day: date,
-) -> None:
-    """Write the day's review page and one application row per lead."""
-    review_page = create_application_review_page(rows, context.export_directory, day)
-    for index, row in enumerate(rows, start=1):
-        row["application_progress"] = excel_review_link(review_page, index)
-        upsert_application_record(
-            database,
-            row,
-            review_url=row["application_progress"],
-            status=row.get("application_status", "Pending preparation"),
-            unknown_questions=row.get("unknown_questions", []),
-            filled_fields=row.get("filled_fields", []),
-        )
-
-
-# ----------------------------------------------------------------------
-# Orchestration
+# Dry run
 # ----------------------------------------------------------------------
 
 
@@ -412,54 +241,20 @@ Discoverer = Callable[[RunContext, set[str], RunStats], list[Any]]
 def run(
     context: RunContext,
     discover: Discoverer = discover_jobs,
+    known_urls: Iterable[str] = (),
     today: date | None = None,
-    llm_client: LLMClient | None = None,
-) -> RunStats:
+) -> tuple[RunStats, list[Job]]:
+    """Discover and score without saving anything. Returns the stats and the matches."""
     stats = RunStats()
-    run_day = today or date.today()
-    export_directory = context.export_directory
-    export_directory.mkdir(parents=True, exist_ok=True)
-
-    with Database(context.database_path) as database:
-        known_urls = database.get_job_urls()
-
-        raw_jobs = discover(context, known_urls, stats)
-        matched = score_jobs(raw_jobs, context, stats, today)
-        new_leads = save_jobs(database, matched, stats)
-        tailor_documents(context, database, [job.to_dict() for job in matched], llm_client)
-
-        # The very first run has no history, so every current match counts
-        # as a lead for the daily workbook.
-        marker = export_directory / ".daily_exports_initialized"
-        leads = new_leads if marker.exists() else matched
-
-        prepared = prepare_applications(context, leads)
-        rows = leads_for_day(database, run_day, prepared)
-        track_applications(context, database, rows, run_day)
-
-        # Hand the day's state to the "Job Application" Claude project and
-        # pick up any status changes made there. Never fails the run.
-        try:
-            sync_project(database, context.project_root)
-        except Exception:  # noqa: BLE001
-            logger.exception("Project sync failed; the run itself is unaffected")
-
-    export_daily_new_leads(
-        rows,
-        export_directory,
-        run_date=run_day,
-        freshness_windows=context.settings.search.freshness_windows_days,
-    )
-    export_master_jobs(context.database_path, export_directory)
-    marker.touch()
-
+    raw_jobs = discover(context, set(known_urls), stats)
+    matched = score_jobs(raw_jobs, context, stats, today)
     stats.log_summary()
-    return stats
+    return stats, matched
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Search job portals, score jobs and export the day's leads.",
+        description="Dry run of the search engine: discover and score jobs, print the matches, save nothing.",
     )
     parser.add_argument(
         "--sources",
@@ -496,8 +291,9 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Sources: %s", context.settings.sources)
     logger.info("Keywords: %s", context.settings.search.keywords)
     logger.info("Locations: %s", context.settings.search.locations)
-    logger.info("Database: %s", context.database_path)
-    run(context)
+    _, matched = run(context)
+    for job in sorted(matched, key=lambda item: -(item.match_score or 0)):
+        logger.info("%3s  %-7s %-45s | %s", job.match_score, job.match_category, job.title[:45], job.company)
 
 
 if __name__ == "__main__":
