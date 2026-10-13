@@ -9,6 +9,10 @@ target_roles:
   - Product Operations Analyst
   - Implementation Analyst
   - Process Analyst
+  - Associate Product Manager
+  - Associate Product Analyst
+  - APM
+  - Junior Product Manager
 
 proven_skills:
   - Business Analysis
@@ -64,6 +68,7 @@ experience_areas:
   - Solution Consulting
   - AI-powered Analytics
 
-# Fill these from the resume when available. Blank values disable the check.
-experience_years_min: ""
-experience_years_max: ""
+# Jobs whose required-experience range does not overlap this range are
+# rejected. Leave blank to disable the check.
+experience_years_min: 3
+experience_years_max: 5

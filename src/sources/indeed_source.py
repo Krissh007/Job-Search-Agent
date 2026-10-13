@@ -60,10 +60,16 @@ class IndeedSource(BaseJobSource):
         search_term: str,
         location: str,
         max_jobs: int = 50,
+        excluded_urls: set[str] | None = None,
+        max_pages: int = 1,
     ) -> list[Job]:
         """
         Search Indeed and return normalized shared Job objects.
+
+        Indeed reads a single results page, so ``max_pages`` is accepted
+        for interface compatibility only.
         """
+        excluded_urls = excluded_urls or set()
 
         search_url = self.build_search_url(
             keyword=search_term,
@@ -169,6 +175,10 @@ class IndeedSource(BaseJobSource):
                         f"Skipping Indeed card {index}: "
                         "title not found"
                     )
+                    continue
+
+                if job_url in excluded_urls:
+                    print(f"Skipping existing Indeed job: {job_url}")
                     continue
 
                 print(

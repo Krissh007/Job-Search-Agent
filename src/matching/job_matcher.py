@@ -2,279 +2,206 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, is_dataclass
-from typing import Any, Dict, List
+from functools import lru_cache
+from typing import Any
+
+from src.config import MatchingRules, parse_matching_rules
+from src.resume_profile import ResumeProfile, parse_resume_profile
+
+INDIA_TERMS = (
+    "india",
+    "hyderabad",
+    "secunderabad",
+    "bengaluru",
+    "bangalore",
+    "mumbai",
+    "navi mumbai",
+    "pune",
+    "delhi",
+    "new delhi",
+    "ncr",
+    "gurugram",
+    "gurgaon",
+    "noida",
+    "chennai",
+    "kolkata",
+    "ahmedabad",
+    "kochi",
+    "pan india",
+)
+
+FOREIGN_TERMS = (
+    "united states",
+    "usa",
+    "u.s.",
+    "canada",
+    "uk",
+    "united kingdom",
+    "london",
+    "australia",
+    "singapore",
+    "dubai",
+    "uae",
+    "new york",
+    "california",
+    "texas",
+    "florida",
+)
+
+@lru_cache(maxsize=4096)
+def _phrase_pattern(phrase: str) -> re.Pattern[str]:
+    # Whole-word match: "ai" must not match "maintain" or "Chennai",
+    # "uat" must not match "evaluate". Hyphens and punctuation count as
+    # boundaries, so "AI-powered" still matches "ai".
+    return re.compile(r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])")
+
+
+def contains_phrase(text: str, phrase: Any) -> bool:
+    """True when ``phrase`` appears in ``text`` as whole words."""
+    normalized = " ".join(str(phrase or "").lower().split())
+    if not normalized:
+        return False
+    return _phrase_pattern(normalized).search(text) is not None
+
+
+def _tokens(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9+#]+", value.lower())
+
+
+def _token_matches(left: str, right: str) -> bool:
+    # Short tokens must match exactly; longer ones may share a stem
+    # ("gather" ~ "gathering", "requirement" ~ "requirements").
+    if len(left) < 4 or len(right) < 4:
+        return left == right
+    return left.startswith(right) or right.startswith(left)
+
+
+def fuzzy_phrase_match(text: str, phrase: Any, threshold: float = 0.67) -> bool:
+    """
+    Multi-word phrases also match when most of their words appear in any
+    order, e.g. "Business requirements gathering" ~ "gather business
+    requirements".
+    """
+    if contains_phrase(text, phrase):
+        return True
+
+    phrase_tokens = _tokens(str(phrase or ""))
+    if len(phrase_tokens) < 2:
+        return False
+
+    text_tokens = set(_tokens(text))
+    matched = sum(
+        any(_token_matches(text_token, token) for text_token in text_tokens)
+        for token in phrase_tokens
+    )
+    return matched / len(phrase_tokens) >= threshold
 
 
 class JobMatcher:
     """
-    Matches normalized job records against the candidate profile.
-    Supports both dictionaries and Python objects.
+    Scores a job against the candidate profile with explainable reasons
+    and hard eligibility gates. All weights and thresholds come from
+    matching_rules.yaml.
     """
 
     def __init__(
         self,
-        resume_profile: Any = None,
-        matching_rules: Dict[str, Any] | None = None,
+        resume_profile: ResumeProfile | dict[str, Any] | None = None,
+        matching_rules: MatchingRules | dict[str, Any] | None = None,
     ) -> None:
-        self.resume_profile = resume_profile
-        self.matching_rules = matching_rules or {}
+        self.profile = parse_resume_profile(resume_profile)
+        self.rules = parse_matching_rules(matching_rules)
+        self._aliases = {
+            " ".join(key.lower().split()): values
+            for key, values in self.rules.skill_aliases.items()
+        }
 
-        self.scoring_rules = self.matching_rules.get(
-            "scoring",
-            {},
-        )
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
-    def match(self, job: Any) -> Dict[str, Any]:
-        """
-        Match a job against the candidate profile.
-
-        The input may be:
-        - a dictionary
-        - a dataclass
-        - an ordinary Python object
-        """
-
+    def match(self, job: Any) -> dict[str, Any]:
+        """Return the score, category, reasons and gate results for a job."""
         job_data = self._to_dict(job)
 
         title = self._text(job_data.get("title"))
-        company = self._text(job_data.get("company"))
         location = self._text(job_data.get("location"))
         description = self._text(job_data.get("description"))
-        source = self._text(job_data.get("source"))
+        company = self._text(job_data.get("company"))
+        source = self._text(job_data.get("source")).lower()
 
-        searchable_text = " ".join(
-            [
-                title,
-                company,
-                location,
-                description,
-            ]
-        ).lower()
+        text = " ".join([title, company, location, description]).lower()
+        # Evidence must come from the posting body, not just its title.
+        body_text = description.lower()
+        weights = self.rules.scoring
 
         score = 0
-        reasons: List[str] = []
-        missing_keywords: List[str] = []
-
-        target_roles = self._profile_list("target_roles")
-        proven_skills = self._profile_list("proven_skills")
-        responsibilities = self._profile_list("responsibilities")
-        tools = self._profile_list("tools_technologies")
-        industries = self._profile_list("industries")
-        experience_areas = self._profile_list("experience_areas")
-        preferred_locations = self._get_preferred_locations()
-        minimum_evidence_matches = self._score_rule(
-            "minimum_evidence_matches",
-            2,
-        )
-        minimum_match_score = self._score_rule(
-            "minimum_match_score",
-            45,
-        )
-
-        role_weight = self._score_rule("role_match", 40)
-        proven_skill_weight = self._score_rule("proven_skill", 3)
-        proven_skill_max = self._score_rule("proven_skill_max", 30)
-        responsibility_weight = self._score_rule("responsibility", 2)
-        responsibility_max = self._score_rule("responsibility_max", 20)
-        preferred_location_weight = self._score_rule(
-            "preferred_location",
-            10,
-        )
-        tool_weight = self._score_rule("tool", 1)
-        tool_max = self._score_rule("tool_max", 10)
-        domain_weight = self._score_rule("domain_match", 2)
-        domain_max = self._score_rule("domain_match_max", 10)
-        experience_weight = self._score_rule("experience_area", 2)
-        experience_max = self._score_rule(
-            "experience_area_max",
-            10,
-        )
+        reasons: list[str] = []
+        missing_keywords: list[str] = []
+        rejection_reasons: list[str] = []
 
         matched_roles = [
-            role
-            for role in target_roles
-            if self._contains_phrase(searchable_text, role)
+            role for role in self.profile.target_roles if contains_phrase(text, role)
         ]
-
         if matched_roles:
-            score += role_weight
-            reasons.append(
-                "Target role match: " + ", ".join(matched_roles)
-            )
+            score += weights.role_match
+            reasons.append("Target role match: " + ", ".join(matched_roles))
         else:
-            missing_keywords.extend(target_roles[:3])
+            missing_keywords.extend(self.profile.target_roles[:3])
 
-        skill_aliases = self.matching_rules.get(
-            "skill_aliases",
-            {},
-        )
-
-        matched_skills = [
-            skill
-            for skill in proven_skills
-            if self._matches_profile_term(
-                searchable_text,
-                skill,
-                skill_aliases,
-            )
+        evidence_groups = [
+            (self.profile.proven_skills, weights.proven_skill, weights.proven_skill_max),
+            (self.profile.responsibilities, weights.responsibility, weights.responsibility_max),
+            (self.profile.tools_technologies, weights.tool, weights.tool_max),
+            (self.profile.industries, weights.domain_match, weights.domain_match_max),
+            (self.profile.experience_areas, weights.experience_area, weights.experience_area_max),
         ]
 
-        skill_score = min(
-            len(matched_skills) * proven_skill_weight,
-            proven_skill_max,
-        )
-        score += skill_score
-
-        reasons.extend(matched_skills)
-
-        matched_responsibilities = [
-            responsibility
-            for responsibility in responsibilities
-            if self._matches_profile_term(
-                searchable_text,
-                responsibility,
+        evidence_terms: set[str] = set()
+        matched_industries: list[str] = []
+        for terms, weight, cap in evidence_groups:
+            matched = [term for term in terms if self._matches_term(text, term)]
+            score += min(len(matched) * weight, cap)
+            reasons.extend(term for term in matched if term not in reasons)
+            evidence_terms.update(
+                term.lower() for term in matched if self._matches_term(body_text, term)
             )
-        ]
-
-        responsibility_score = min(
-            len(matched_responsibilities) * responsibility_weight,
-            responsibility_max,
-        )
-        score += responsibility_score
-
-        reasons.extend(matched_responsibilities)
-
-        matched_tools = [
-            tool
-            for tool in tools
-            if self._matches_profile_term(
-                searchable_text,
-                tool,
-            )
-        ]
-
-        tool_score = min(
-            len(matched_tools) * tool_weight,
-            tool_max,
-        )
-        score += tool_score
-
-        reasons.extend(matched_tools)
-        rejection_reasons: List[str] = []
-
-        matched_industries = [
-            industry
-            for industry in industries
-            if self._matches_profile_term(
-                searchable_text,
-                industry,
-            )
-        ]
-        domain_score = min(
-            len(matched_industries) * domain_weight,
-            domain_max,
-        )
-        score += domain_score
-        reasons.extend(matched_industries)
-
-        if self._has_excluded_domain(
-            searchable_text,
-            matched_industries,
-        ):
-            rejection_reasons.append(
-                "Job domain is outside the candidate profile"
-            )
-
-        matched_experience_areas = [
-            area
-            for area in experience_areas
-            if self._matches_profile_term(
-                searchable_text,
-                area,
-            )
-        ]
-        experience_score = min(
-            len(matched_experience_areas) * experience_weight,
-            experience_max,
-        )
-        score += experience_score
-        reasons.extend(matched_experience_areas)
+            if terms is self.profile.industries:
+                matched_industries = matched
+        evidence_count = len(evidence_terms)
 
         matched_locations = [
-            preferred_location
-            for preferred_location in preferred_locations
-            if self._contains_phrase(location.lower(), preferred_location)
-            or self._contains_phrase(
-                searchable_text,
-                preferred_location,
-            )
+            place
+            for place in self.rules.preferred_locations
+            if contains_phrase(location.lower(), place)
         ]
-
         if matched_locations:
-            score += preferred_location_weight
-            reasons.append(
-                "Preferred location: "
-                + ", ".join(matched_locations)
-            )
+            score += weights.preferred_location
+            reasons.append("Preferred location: " + ", ".join(matched_locations))
 
-        evidence_count = (
-            len(matched_skills)
-            + len(matched_responsibilities)
-            + len(matched_tools)
-            + len(matched_industries)
-            + len(matched_experience_areas)
-        )
-        if self._india_only() and not self._is_india_eligible(
-            location,
-            searchable_text,
-        ):
+        if self._has_excluded_domain(text, matched_industries):
+            rejection_reasons.append("Job domain is outside the candidate profile")
+
+        if self.rules.india_only and not self._is_india_eligible(location, text, source):
             rejection_reasons.append("Location is not India-eligible")
 
-        if evidence_count < minimum_evidence_matches:
-            rejection_reasons.append(
-                "Insufficient resume evidence beyond the job title"
-            )
+        if evidence_count < self.rules.minimum_evidence_matches:
+            rejection_reasons.append("Insufficient resume evidence beyond the job title")
 
-        experience_rejection = self._experience_rejection(
-            job_data,
-            searchable_text,
-        )
+        experience_rejection = self._experience_rejection(job_data, text)
         if experience_rejection:
             rejection_reasons.append(experience_rejection)
 
-        maximum_score = (
-            role_weight
-            + proven_skill_max
-            + responsibility_max
-            + preferred_location_weight
-            + tool_max
-            + domain_max
-            + experience_max
-        )
-        normalized_score = round(
-            (score / maximum_score) * 100
-        ) if maximum_score else 0
+        maximum = weights.maximum_score
+        normalized_score = round(score / maximum * 100) if maximum else 0
         normalized_score = max(0, min(100, normalized_score))
 
-        if normalized_score < minimum_match_score:
-            rejection_reasons.append(
-                "Match score is below the minimum threshold"
-            )
-
-        category = self._get_category(normalized_score)
+        if normalized_score < self.rules.minimum_match_score:
+            rejection_reasons.append("Match score is below the minimum threshold")
 
         return {
-            "title": title,
-            "company": company,
-            "location": location,
-            "job_url": self._text(
-                job_data.get("job_url")
-                or job_data.get("url")
-            ),
-            "source": source,
-            "description": description,
             "match_score": normalized_score,
-            "match_category": category,
+            "match_category": self.category_for(normalized_score),
             "match_reasons": reasons,
             "missing_keywords": missing_keywords,
             "eligible": not rejection_reasons,
@@ -282,315 +209,97 @@ class JobMatcher:
             "evidence_count": evidence_count,
         }
 
-    def score_job(self, job: Any) -> Dict[str, Any]:
-        """
-        Backward-compatible alias for match().
-        """
+    def score_job(self, job: Any) -> dict[str, Any]:
+        """Backward-compatible alias for match()."""
         return self.match(job)
 
-    def _profile_list(self, field_name: str) -> List[str]:
-        if self.resume_profile is None:
-            return []
+    def category_for(self, score: float) -> str:
+        bands = self.rules.categories
+        if score >= bands.strong:
+            return "Strong"
+        if score >= bands.good:
+            return "Good"
+        if score >= bands.review:
+            return "Review"
+        return "Low"
 
-        if isinstance(self.resume_profile, dict):
-            values = self.resume_profile.get(field_name, [])
-        else:
-            values = getattr(
-                self.resume_profile,
-                field_name,
-                [],
-            )
+    # ------------------------------------------------------------------
+    # Rules
+    # ------------------------------------------------------------------
 
-        if values is None:
-            return []
+    def _matches_term(self, text: str, term: str) -> bool:
+        candidates = [term, *self._aliases.get(" ".join(term.lower().split()), [])]
+        return any(fuzzy_phrase_match(text, candidate) for candidate in candidates)
 
-        if isinstance(values, str):
-            return [values]
-
-        return [
-            self._text(value)
-            for value in values
-            if self._text(value)
-        ]
-
-    def _get_preferred_locations(self) -> List[str]:
-        locations = []
-
-        locations.extend(
-            self._profile_list("preferred_locations")
-        )
-
-        if not locations:
-            locations.extend(
-                [
-                    "Hyderabad",
-                    "Remote",
-                    "Work from home",
-                ]
-            )
-
-        return locations
-
-    def _india_only(self) -> bool:
-        return bool(self.matching_rules.get("india_only", True))
-
-    def _has_excluded_domain(
-        self,
-        searchable_text: str,
-        matched_industries: List[str],
-    ) -> bool:
-        excluded_domains = self.matching_rules.get(
-            "excluded_domains",
-            [],
-        )
+    def _has_excluded_domain(self, text: str, matched_industries: list[str]) -> bool:
         matched_text = " ".join(matched_industries).lower()
         return any(
-            str(domain).lower() in searchable_text
-            and str(domain).lower() not in matched_text
-            for domain in excluded_domains
+            contains_phrase(text, domain) and domain.lower() not in matched_text
+            for domain in self.rules.excluded_domains
         )
 
-    @staticmethod
-    def _is_india_eligible(
-        location: str,
-        searchable_text: str,
-    ) -> bool:
-        india_terms = {
-            "india",
-            "hyderabad",
-            "bengaluru",
-            "bangalore",
-            "mumbai",
-            "pune",
-            "delhi",
-            "gurugram",
-            "gurgaon",
-            "noida",
-            "chennai",
-            "kolkata",
-            "remote india",
-            "india remote",
-            "work from home india",
-            "pan india",
-            "remote",
-        }
-        foreign_terms = {
-            "united states",
-            "usa",
-            "u.s.",
-            "canada",
-            "uk",
-            "united kingdom",
-            "australia",
-            "singapore",
-            "new york",
-            "california",
-            "texas",
-            "florida",
-        }
-        if any(term in location.lower() for term in foreign_terms):
+    def _is_india_eligible(self, location: str, text: str, source: str) -> bool:
+        location_lower = location.lower()
+
+        if any(contains_phrase(location_lower, term) for term in FOREIGN_TERMS):
             return False
-        return any(term in searchable_text for term in india_terms)
+        if any(contains_phrase(location_lower, term) for term in INDIA_TERMS):
+            return True
 
-    def _experience_rejection(
-        self,
-        job_data: Dict[str, Any],
-        searchable_text: str,
-    ) -> str:
-        minimum = self._profile_number("experience_years_min")
-        maximum = self._profile_number("experience_years_max")
-        if minimum is None and maximum is None:
+        # A bare "Remote" (or empty) location is only accepted when the
+        # posting ties the role to India, or it comes from an India portal.
+        if source in self.rules.india_portals:
+            return True
+        return any(contains_phrase(text, term) for term in INDIA_TERMS)
+
+    def _experience_rejection(self, job_data: dict[str, Any], text: str) -> str:
+        candidate_min = self.profile.experience_years_min
+        candidate_max = self.profile.experience_years_max
+        if candidate_min is None and candidate_max is None:
             return ""
 
-        required_values = [
-            int(value)
-            for value in re.findall(
-                r"(?<!\d)(\d{1,2})\s*\+?\s*(?:years?|yrs?)",
-                searchable_text,
-            )
-        ]
-        if not required_values:
-            return ""
+        required_min = job_data.get("experience_min")
+        required_max = job_data.get("experience_max")
 
-        required_minimum = min(required_values)
-        required_maximum = max(required_values)
-        if minimum is not None and required_maximum < minimum:
+        if required_min is None and required_max is None:
+            # No structured range from the portal: fall back to explicit
+            # "N years" statements in the posting.
+            values = [
+                int(value)
+                for value in re.findall(
+                    r"(?<!\d)(\d{1,2})\s*\+?\s*(?:years?|yrs?)\b", text
+                )
+            ]
+            if not values:
+                return ""
+            required_min, required_max = min(values), max(values)
+
+        if candidate_min is not None and required_max is not None and required_max < candidate_min:
             return "Required experience is below the candidate range"
-        if maximum is not None and required_minimum > maximum:
+        if candidate_max is not None and required_min is not None and required_min > candidate_max:
             return "Required experience exceeds the candidate range"
         return ""
 
-    def _profile_number(self, field_name: str) -> float | None:
-        if self.resume_profile is None:
-            return None
-        if isinstance(self.resume_profile, dict):
-            value = self.resume_profile.get(field_name)
-        else:
-            value = getattr(self.resume_profile, field_name, None)
-        if value in (None, ""):
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    def _score_rule(
-        self,
-        key: str,
-        default: int,
-    ) -> int:
-        value = self.scoring_rules.get(key, default)
-
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return default
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_dict(job: Any) -> Dict[str, Any]:
+    def _to_dict(job: Any) -> dict[str, Any]:
         if job is None:
             return {}
-
         if isinstance(job, dict):
             return job.copy()
-
         if is_dataclass(job):
             return asdict(job)
-
         if hasattr(job, "__dict__"):
             return vars(job).copy()
-
         return {}
 
     @staticmethod
     def _text(value: Any) -> str:
         if value is None:
             return ""
-
         if isinstance(value, list):
             return ", ".join(str(item) for item in value)
-
         return " ".join(str(value).split()).strip()
-
-    @staticmethod
-    def _contains_phrase(
-        searchable_text: str,
-        phrase: str,
-    ) -> bool:
-        normalized_phrase = " ".join(
-            str(phrase).lower().split()
-        ).strip()
-
-        if not normalized_phrase:
-            return False
-
-        return normalized_phrase in searchable_text
-
-    @classmethod
-    def _matches_profile_term(
-        cls,
-        searchable_text: str,
-        term: str,
-        aliases: Dict[str, Any] | None = None,
-    ) -> bool:
-        candidates = [term]
-        normalized_term = cls._normalize_phrase(term)
-
-        if aliases:
-            for key, values in aliases.items():
-                if cls._normalize_phrase(key) == normalized_term:
-                    if isinstance(values, str):
-                        candidates.append(values)
-                    elif isinstance(values, list):
-                        candidates.extend(values)
-
-        return any(
-            cls._phrase_or_token_match(searchable_text, candidate)
-            for candidate in candidates
-        )
-
-    @classmethod
-    def _phrase_or_token_match(
-        cls,
-        searchable_text: str,
-        phrase: Any,
-    ) -> bool:
-        normalized_phrase = cls._normalize_phrase(phrase)
-
-        if not normalized_phrase:
-            return False
-
-        if normalized_phrase in searchable_text:
-            return True
-
-        phrase_tokens = cls._tokens(normalized_phrase)
-        text_tokens = set(cls._tokens(searchable_text))
-
-        if len(phrase_tokens) < 2:
-            return False
-
-        matched_tokens = sum(
-            any(
-                cls._token_starts_with(text_token, phrase_token)
-                or cls._token_starts_with(phrase_token, text_token)
-                for text_token in text_tokens
-            )
-            for phrase_token in phrase_tokens
-        )
-
-        return matched_tokens / len(phrase_tokens) >= 0.67
-
-    @staticmethod
-    def _normalize_phrase(value: Any) -> str:
-        return " ".join(str(value or "").lower().split()).strip()
-
-    @staticmethod
-    def _tokens(value: str) -> list[str]:
-        return re.findall(r"[a-z0-9+#]+", value.lower())
-
-    @staticmethod
-    def _token_starts_with(left: str, right: str) -> bool:
-        if len(left) < 4 or len(right) < 4:
-            return left == right
-
-        return left.startswith(right) or right.startswith(left)
-
-    @staticmethod
-    def _get_category(score: int) -> str:
-        if score >= 75:
-            return "Strong"
-        if score >= 60:
-            return "Good"
-        if score >= 45:
-            return "Review"
-        return "Low"
-
-
-if __name__ == "__main__":
-    from src.resume_profile import load_resume_profile
-
-    profile = load_resume_profile(
-        "config/candidate_profile.yaml"
-    )
-
-    matcher = JobMatcher(
-        resume_profile=profile,
-        matching_rules={},
-    )
-
-    sample_job = {
-        "title": "Business Analyst",
-        "company": "Example Company",
-        "location": "Hyderabad",
-        "job_url": "https://example.com/job/123",
-        "source": "Indeed",
-        "description": (
-            "Business analysis, SQL, stakeholder management, "
-            "requirements gathering and UAT."
-        ),
-    }
-
-    result = matcher.match(sample_job)
-
-    print("Match result:")
-    print(result)

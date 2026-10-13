@@ -11,10 +11,14 @@ scoring:
   domain_match_max: 10
   experience_area: 2
   experience_area_max: 10
-  minimum_evidence_matches: 2
 
-india_only: true
+# Gates: a job failing any of these is rejected regardless of score.
 minimum_match_score: 45
+minimum_evidence_matches: 2
+india_only: true
+# Portals whose "Remote" jobs are assumed to be India-based.
+india_portals:
+  - naukri
 excluded_domains:
   - manufacturing
   - cybersecurity

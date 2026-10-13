@@ -1,34 +1,62 @@
+# Search engine settings. Unknown keys are rejected at startup (see src/config.py).
+# Scoring thresholds and gates live in matching_rules.yaml.
+# JobPilot runs this engine and passes its own keywords and sources (Settings
+# screen), so those two lists only apply to a dry run of this repo.
+
 project:
   name: job_search_agent
   timezone: Asia/Kolkata
   database_path: data/jobs.db
-  export_directory: data/exports
   log_directory: data/logs
+  debug_directory: data/debug
 
 browser:
   headless: false
   default_timeout_ms: 30000
   navigation_timeout_ms: 60000
-  reuse_existing_profile: false
 
 search:
   keywords:
-    - business analyst
+    - AI Business Analyst
+    - AI Product Analyst
+    - Business Analyst
+    - Product Analyst
+    - Associate Product Manager
   locations:
     - Hyderabad
   max_results_per_query: 60
   max_pages_per_source: 10
-  max_posted_days: 30
-  freshness_windows_days:
-    - 7
-    - 30
-  minimum_match_score: 45
-  minimum_evidence_matches: 2
-  india_only: true
+  # Jobs older than this are dropped before matching. Jobs whose age the
+  # portal doesn't show are kept.
+  max_posted_days: 7
+  # Open each job's detail page for the full description. Much slower
+  # (one extra page load per job) but gives far better matching.
+  enrich_details: true
 
 sources:
   - naukri
+  - linkedin
 
-application:
-  prepare_after_search: true
-  max_jobs_per_run: 10
+# Tailored resume + cover letter settings for src/tailoring, which JobPilot's
+# docs step uses. Only facts from the master resume are used.
+tailoring:
+  enabled: true
+  min_match_score: 60
+  master_resume_path: config/master_resume.md
+  output_directory: data/applications
+  provider: gemini
+  model: gemini-3.8-flash
+  fallback_models:
+    - gemini-3.5-flash-lite
+  api_key_env: GEMINI_API_KEY
+  max_jobs_per_run: 15
+  seconds_between_requests: 6
+
+# Re-upload your resume to LinkedIn: python -m src.apply.linkedin_resume
+# (not scheduled; run it after replacing this file). The signed-in browser
+# profile it uses is set by easy_apply.browser_profile_dir (default
+# data/browser_profile), shared with JobPilot's apply agent.
+resume_upload:
+  enabled: true
+  file: config/Krishna_Maheswaram_AI_Business_Analyst_Resume.docx
+  keep_only_latest: true

@@ -31,9 +31,14 @@ class BaseJobSource(ABC):
         search_term: str,
         location: str,
         max_jobs: int = 50,
+        excluded_urls: set[str] | None = None,
+        max_pages: int = 10,
     ) -> list[Job]:
         """
         Search for jobs and return them as Job objects.
+
+        Jobs whose URL is in ``excluded_urls`` are already stored and
+        must be skipped.
         """
         raise NotImplementedError
 
