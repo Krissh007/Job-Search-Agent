@@ -103,6 +103,20 @@ class Database:
             )
             """
         )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tailored_documents (
+                job_url TEXT PRIMARY KEY,
+                resume_path TEXT NOT NULL,
+                cover_letter_path TEXT NOT NULL,
+                report_path TEXT,
+                keyword_coverage REAL,
+                match_score REAL,
+                model TEXT,
+                created_at TEXT
+            )
+            """
+        )
         self.connection.commit()
 
     def _migrate(self) -> None:
@@ -342,6 +356,49 @@ class Database:
     def get_applications(self) -> Dict[str, Dict[str, Any]]:
         rows = self.connection.execute("SELECT * FROM applications").fetchall()
         return {row["job_url"]: dict(row) for row in rows}
+
+    # ------------------------------------------------------------------
+    # Tailored resumes and cover letters
+    # ------------------------------------------------------------------
+
+    def get_tailored_documents(self) -> Dict[str, Dict[str, Any]]:
+        rows = self.connection.execute("SELECT * FROM tailored_documents").fetchall()
+        return {row["job_url"]: dict(row) for row in rows}
+
+    def save_tailored_documents(
+        self,
+        job_url: str,
+        resume_path: str,
+        cover_letter_path: str,
+        report_path: str = "",
+        keyword_coverage: Optional[float] = None,
+        match_score: Optional[float] = None,
+        model: str = "",
+    ) -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        self.connection.execute(
+            """
+            INSERT INTO tailored_documents (
+                job_url, resume_path, cover_letter_path, report_path,
+                keyword_coverage, match_score, model, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_url) DO UPDATE SET
+                resume_path = excluded.resume_path,
+                cover_letter_path = excluded.cover_letter_path,
+                report_path = excluded.report_path,
+                keyword_coverage = excluded.keyword_coverage,
+                match_score = excluded.match_score,
+                model = excluded.model,
+                created_at = excluded.created_at
+            """,
+            (job_url, resume_path, cover_letter_path, report_path,
+             keyword_coverage, match_score, model, now),
+        )
+        self.connection.commit()
+
+    def delete_tailored_documents(self, job_url: str) -> None:
+        self.connection.execute("DELETE FROM tailored_documents WHERE job_url = ?", (job_url,))
+        self.connection.commit()
 
     def close(self) -> None:
         if self.connection:

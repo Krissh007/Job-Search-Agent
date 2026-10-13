@@ -62,6 +62,30 @@ class ApplicationSettings(_StrictModel):
     max_jobs_per_run: int = Field(10, ge=0)
 
 
+class TailoringSettings(_StrictModel):
+    """Tailored resume + cover letter generation for high-scoring jobs."""
+
+    enabled: bool = False
+    # Only jobs scoring at least this much get documents.
+    min_match_score: int = Field(60, ge=0, le=100)
+    # Your original resume (.docx, .pdf, .txt or .md). The only source of facts.
+    master_resume_path: str = "config/master_resume.docx"
+    output_directory: str = "data/applications"
+    provider: str = "gemini"
+    model: str = "gemini-3.8-flash"
+    # Tried in order when the main model fails or its free quota runs out.
+    fallback_models: list[str] = Field(default_factory=lambda: ["gemini-3.5-flash-lite"])
+    api_key_env: str = "GEMINI_API_KEY"
+    temperature: float = Field(0.3, ge=0, le=1)
+    # 0 = no limit. Keeps a run inside the free tier's daily quota.
+    max_jobs_per_run: int = Field(15, ge=0)
+    # Pause between model calls to stay under per-minute free-tier limits.
+    seconds_between_requests: float = Field(6, ge=0)
+    # Jobs whose saved description is shorter than this are skipped: there
+    # is not enough text to tailor against.
+    min_description_chars: int = Field(300, ge=0)
+
+
 class EasyApplySettings(_StrictModel):
     """LinkedIn Easy Apply in the agent's own signed-in browser profile."""
 
@@ -77,6 +101,41 @@ class EasyApplySettings(_StrictModel):
     max_steps_per_application: int = Field(8, ge=1)
 
 
+class AutoApplySettings(_StrictModel):
+    """
+    Unattended applying (python -m src.apply.auto_apply, run by src.daily).
+    Submits only forms that are completely answered from
+    application_profile.yaml; anything with an unknown question is left
+    unsubmitted and its questions go to project_sync/open_questions.md.
+    """
+
+    enabled: bool = False
+    # Portals to apply on, in order.
+    sources: list[str] = Field(default_factory=lambda: ["linkedin", "naukri"])
+    # Only jobs Claude/you marked "shortlisted" in the project sync.
+    shortlisted_only: bool = True
+    min_match_score: int = Field(60, ge=0, le=100)
+    # Submissions per calendar day across all portals.
+    daily_cap: int = Field(10, ge=0, le=50)
+
+    @model_validator(mode="after")
+    def _check_sources(self) -> "AutoApplySettings":
+        unknown = [name for name in self.sources if name not in ("linkedin", "naukri")]
+        if unknown:
+            raise ValueError(f"auto_apply.sources: unsupported {unknown}; use linkedin, naukri")
+        return self
+
+
+class ResumeUploadSettings(_StrictModel):
+    """Weekday re-upload of your resume to LinkedIn (src.apply.linkedin_resume)."""
+
+    enabled: bool = False
+    # .pdf, .docx or .doc, at most 2 MB.
+    file: str = "config/linkedin_resume.docx"
+    # Delete older copies of the same file name after a confirmed upload.
+    keep_only_latest: bool = True
+
+
 class Settings(_StrictModel):
     project: ProjectSettings = Field(default_factory=ProjectSettings)
     browser: BrowserSettings = Field(default_factory=BrowserSettings)
@@ -84,6 +143,9 @@ class Settings(_StrictModel):
     sources: list[str] = Field(default_factory=lambda: ["naukri"])
     application: ApplicationSettings = Field(default_factory=ApplicationSettings)
     easy_apply: EasyApplySettings = Field(default_factory=EasyApplySettings)
+    auto_apply: AutoApplySettings = Field(default_factory=AutoApplySettings)
+    resume_upload: ResumeUploadSettings = Field(default_factory=ResumeUploadSettings)
+    tailoring: TailoringSettings = Field(default_factory=TailoringSettings)
 
     @model_validator(mode="after")
     def _check_sources(self) -> "Settings":

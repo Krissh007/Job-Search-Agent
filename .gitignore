@@ -17,6 +17,13 @@ data/exports/*.html
 data/exports/.daily_exports_initialized
 
 config/application_profile.yaml
-
+# Tailored resumes / cover letters and your original resume (personal data)
+data/applications/
+config/master_resume.*
 # Signed-in browser profile for Easy Apply (session cookies)
 data/browser_profile/
+# Generated snapshots for the morning review and JARVIS (job data); keep only the inbox guide
+project_sync/*
+!project_sync/inbox/
+project_sync/inbox/*
+!project_sync/inbox/README.md

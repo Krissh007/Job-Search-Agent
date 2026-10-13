@@ -37,7 +37,52 @@ search:
 
 sources:
   - naukri
+  - linkedin
 
 application:
   prepare_after_search: true
   max_jobs_per_run: 10
+
+# Tailored resume + cover letter (.docx) for every job scoring at or above
+# min_match_score. Needs a free Gemini key in GEMINI_API_KEY (env var or a
+# line in the project's .env file) and your original resume at
+# master_resume_path. Only facts from that resume are used.
+tailoring:
+  enabled: true
+  min_match_score: 60
+  master_resume_path: config/master_resume.md
+  output_directory: data/applications
+  provider: gemini
+  model: gemini-3.8-flash
+  fallback_models:
+    - gemini-3.5-flash-lite
+  api_key_env: GEMINI_API_KEY
+  max_jobs_per_run: 15
+  seconds_between_requests: 6
+
+# LinkedIn Easy Apply pacing (shared by manual and auto-apply).
+easy_apply:
+  min_match_score: 60
+  max_jobs_per_run: 5
+  seconds_between_jobs: 25
+
+# Unattended applying (python -m src.daily / python -m src.apply.auto_apply).
+# Submits only fully answered forms for jobs marked "shortlisted" in the
+# Claude project review. Sign in once first:
+#   python -m src.apply.linkedin login
+#   python -m src.apply.naukri login
+auto_apply:
+  enabled: false
+  sources:
+    - linkedin
+    - naukri
+  shortlisted_only: true
+  min_match_score: 60
+  daily_cap: 10
+
+# Mon-Fri 08:30 re-upload to LinkedIn (python -m src.apply.linkedin_resume).
+# Replace this file whenever you update your resume; the next run uploads it.
+resume_upload:
+  enabled: true
+  file: config/Krishna_Maheswaram_AI_Business_Analyst_Resume.docx
+  keep_only_latest: true

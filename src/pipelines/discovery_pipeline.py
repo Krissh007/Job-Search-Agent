@@ -2,6 +2,7 @@
 The single job-search pipeline.
 
     discover -> normalize -> freshness filter -> match -> save
+             -> tailor resume + cover letter (score >= threshold)
              -> prepare applications -> export
 
 Run with:  python -m src.pipelines.discovery_pipeline
@@ -30,8 +31,16 @@ from src.freshness import posted_age_days
 from src.matching.job_matcher import JobMatcher
 from src.models import Job
 from src.normalizer import JobNormalizer
-from src.reports.export_excel import export_daily_new_leads, export_master_jobs
+from src.project_sync import sync_project
+from src.reports.export_excel import (
+    attach_tailored_documents,
+    export_daily_new_leads,
+    export_master_jobs,
+)
 from src.resume_profile import ResumeProfile, load_resume_profile
+from src.tailoring.generator import DocumentGenerator, GenerationResult
+from src.tailoring.llm import LLMClient, LLMError, create_client
+from src.tailoring.master_resume import MasterResumeError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -268,7 +277,56 @@ def save_jobs(database: Database, jobs: Iterable[Job], stats: RunStats) -> list[
 
 
 # ----------------------------------------------------------------------
-# Stage 4: prepare applications and track them
+# Stage 4: tailored resume + cover letter for high-scoring jobs
+# ----------------------------------------------------------------------
+
+
+def profile_evidence(profile: ResumeProfile) -> list[str]:
+    """Skills you listed in candidate_profile.yaml also count as evidence."""
+    return [
+        *profile.proven_skills,
+        *profile.tools_technologies,
+        *profile.responsibilities,
+        *profile.industries,
+    ]
+
+
+def build_document_generator(
+    context: RunContext,
+    client: LLMClient | None = None,
+) -> DocumentGenerator | None:
+    """Return a generator, or None (with a logged reason) when not set up."""
+    tailoring = context.settings.tailoring
+    if not tailoring.enabled:
+        return None
+    try:
+        return DocumentGenerator(
+            tailoring,
+            context.project_root,
+            client or create_client(tailoring, context.project_root),
+            extra_evidence=profile_evidence(context.profile),
+        )
+    except (LLMError, MasterResumeError) as error:
+        logger.warning("Tailored documents skipped: %s", error)
+        return None
+
+
+def tailor_documents(
+    context: RunContext,
+    database: Database,
+    jobs: Iterable[dict[str, Any]],
+    client: LLMClient | None = None,
+) -> GenerationResult | None:
+    generator = build_document_generator(context, client)
+    if generator is None:
+        return None
+    result = generator.generate(database, jobs)
+    result.log_summary()
+    return result
+
+
+# ----------------------------------------------------------------------
+# Stage 5: prepare applications and track them
 # ----------------------------------------------------------------------
 
 
@@ -297,6 +355,7 @@ def leads_for_day(
     """
     prepared = {row["job_url"]: row for row in prepared_rows}
     applications = database.get_applications()
+    documents = database.get_tailored_documents()
     day_prefix = day.isoformat()
 
     rows: list[dict[str, Any]] = []
@@ -319,7 +378,7 @@ def leads_for_day(
 
     # First-run leads discovered on earlier days are still included.
     rows.extend(prepared.values())
-    return rows
+    return [attach_tailored_documents(row, documents) for row in rows]
 
 
 def track_applications(
@@ -354,6 +413,7 @@ def run(
     context: RunContext,
     discover: Discoverer = discover_jobs,
     today: date | None = None,
+    llm_client: LLMClient | None = None,
 ) -> RunStats:
     stats = RunStats()
     run_day = today or date.today()
@@ -366,6 +426,7 @@ def run(
         raw_jobs = discover(context, known_urls, stats)
         matched = score_jobs(raw_jobs, context, stats, today)
         new_leads = save_jobs(database, matched, stats)
+        tailor_documents(context, database, [job.to_dict() for job in matched], llm_client)
 
         # The very first run has no history, so every current match counts
         # as a lead for the daily workbook.
@@ -375,6 +436,13 @@ def run(
         prepared = prepare_applications(context, leads)
         rows = leads_for_day(database, run_day, prepared)
         track_applications(context, database, rows, run_day)
+
+        # Hand the day's state to the "Job Application" Claude project and
+        # pick up any status changes made there. Never fails the run.
+        try:
+            sync_project(database, context.project_root)
+        except Exception:  # noqa: BLE001
+            logger.exception("Project sync failed; the run itself is unaffected")
 
     export_daily_new_leads(
         rows,

@@ -28,10 +28,44 @@ EXPORT_COLUMNS = [
     "missing_keywords",
     "search_term",
     "job_url",
+    "tailored_resume",
+    "cover_letter",
     "application_progress",
     "description",
     "discovered_at",
 ]
+
+
+# Columns rendered as clickable links. Document columns show the file name
+# and link to the file itself.
+LINK_COLUMNS = ("job_url", "tailored_resume", "cover_letter", "application_progress")
+FILE_LINK_COLUMNS = ("tailored_resume", "cover_letter")
+
+
+def attach_tailored_documents(
+    row: dict[str, Any],
+    documents: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Copy tailored resume / cover-letter paths for this job onto the row."""
+    record = documents.get(str(row.get("job_url") or ""))
+    if record:
+        row["tailored_resume"] = record["resume_path"]
+        row["cover_letter"] = record["cover_letter_path"]
+    return row
+
+
+def _write_links(worksheet: Any, columns: list[str], row: dict[str, Any]) -> None:
+    for name in LINK_COLUMNS:
+        target = row.get(name)
+        if not target or name not in columns:
+            continue
+        cell = worksheet.cell(row=worksheet.max_row, column=columns.index(name) + 1)
+        target = str(target)
+        if name in FILE_LINK_COLUMNS:
+            cell.value = Path(target).name
+            target = Path(target).resolve().as_uri()
+        cell.hyperlink = target
+        cell.style = "Hyperlink"
 
 
 def _cell_value(value: Any) -> Any:
@@ -97,17 +131,7 @@ def export_daily_new_leads(
                     for column in EXPORT_COLUMNS
                 ]
             )
-            progress_column = EXPORT_COLUMNS.index(
-                "application_progress"
-            ) + 1
-            progress_cell = worksheet.cell(
-                row=worksheet.max_row,
-                column=progress_column,
-            )
-            progress_link = row.get("application_progress")
-            if progress_link:
-                progress_cell.hyperlink = str(progress_link)
-                progress_cell.style = "Hyperlink"
+            _write_links(worksheet, EXPORT_COLUMNS, row)
             exported_count += 1
 
         worksheet.freeze_panes = "A2"
@@ -140,6 +164,7 @@ def export_master_jobs(
     with Database(database_path) as database:
         jobs = database.get_jobs()
         application_by_url = database.get_applications()
+        documents = database.get_tailored_documents()
 
     unique_jobs: dict[str, dict[str, Any]] = {}
     for job in jobs:
@@ -153,6 +178,7 @@ def export_master_jobs(
         if application:
             row["application_progress"] = application["review_url"]
             row["application_status"] = application["status"]
+        attach_tailored_documents(row, documents)
         unique_jobs[job_url] = row
 
     workbook = Workbook()
@@ -166,14 +192,7 @@ def export_master_jobs(
     for row in unique_jobs.values():
         row["freshness_age_days"] = posted_age_days(row)
         worksheet.append([_cell_value(row.get(column)) for column in columns])
-        progress_column = columns.index("application_progress") + 1
-        progress_cell = worksheet.cell(
-            row=worksheet.max_row,
-            column=progress_column,
-        )
-        if row.get("application_progress"):
-            progress_cell.hyperlink = str(row["application_progress"])
-            progress_cell.style = "Hyperlink"
+        _write_links(worksheet, columns, row)
 
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions

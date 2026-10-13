@@ -5,3 +5,5 @@ pydantic>=2
 pytest
 streamlit
 pandas
+python-docx
+pypdf

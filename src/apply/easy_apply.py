@@ -2,9 +2,9 @@
 LinkedIn Easy Apply form filler.
 
 Fills the Easy Apply dialog on the page that is already open and moves
-through its steps, then STOPS on the final step. It never clicks
-"Submit application": the candidate reviews each open tab and submits it
-themselves. Fields that already have a value (LinkedIn pre-fills contact
+through its steps, then STOPS on the final step. prepare() never clicks
+"Submit application"; only submit(), called by the opt-in auto-apply mode
+for fully answered forms, does. Fields that already have a value (LinkedIn pre-fills contact
 details from the account) are left alone.
 """
 
@@ -99,6 +99,7 @@ class EasyApplyFiller:
         self.page = page
         self.answers = answers
         self.max_steps = max_steps
+        self._dialog: Locator | None = None
 
     # ------------------------------------------------------------------
     # Public
@@ -118,6 +119,7 @@ class EasyApplyFiller:
         dialog = self._application_dialog()
         if dialog is None:
             return EasyApplyResult(STOPPED)
+        self._dialog = dialog
 
         result = EasyApplyResult(STOPPED)
         for step in range(1, self.max_steps + 1):
@@ -147,6 +149,37 @@ class EasyApplyFiller:
                 return result
 
         return result
+
+    def submit(self, timeout_ms: int = 15_000) -> bool:
+        """
+        Click "Submit application" on a form that prepare() left READY_TO_SUBMIT
+        (every required field answered from approved answers). Used only by
+        the opt-in auto-apply mode. True once LinkedIn confirms.
+        """
+        if self._dialog is None:
+            return False
+        button = self._button(self._dialog, SUBMIT_BUTTON)
+        if button is None:
+            return False
+        self._untick_follow_company(self._dialog)
+        button.click()
+        waited = 0
+        while waited <= timeout_ms:
+            self.page.wait_for_timeout(1_000)
+            waited += 1_000
+            if self.application_sent(self.page):
+                return True
+        return False
+
+    @staticmethod
+    def _untick_follow_company(dialog: Locator) -> None:
+        try:
+            for box in dialog.locator("input[type='checkbox']").all():
+                label = EasyApplyFiller._label_for(dialog, box).lower()
+                if "follow" in label and box.is_checked():
+                    box.uncheck(force=True)
+        except Exception:
+            pass
 
     @staticmethod
     def application_sent(page: Page) -> bool:

@@ -9,7 +9,8 @@ open tab yourself:
     python -m src.apply.linkedin apply [--limit 5] [--min-score 60] [--job-url URL ...]
 
 The browser stays open until you close it. Every tab you submit is
-recorded as applied in data/jobs.db. Nothing is ever submitted for you.
+recorded as applied in data/jobs.db. This command never submits for you;
+unattended submitting lives in src.apply.auto_apply (opt-in).
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 from src.apply.easy_apply import (
     ALREADY_APPLIED,
     SUBMITTED,
+    READY_TO_SUBMIT,
     EasyApplyFiller,
     EasyApplyResult,
     build_answers,
@@ -138,11 +140,15 @@ def login(context: RunContext, timeout_minutes: int = 10) -> bool:
     return False
 
 
+CLOSED_JOB_STATUSES = ("rejected", "skipped", "applied", "interviewing", "offer")
+
+
 def select_jobs(
     database: Database,
     min_score: float,
     limit: int,
     job_urls: list[str] | None = None,
+    shortlisted_only: bool = False,
 ) -> list[dict[str, Any]]:
     jobs = {job["job_url"]: job for job in database.get_jobs()}
     if job_urls:
@@ -153,7 +159,8 @@ def select_jobs(
         job
         for job in jobs.values()
         if job.get("source") == "linkedin"
-        and job.get("status") not in ("rejected", "skipped", "applied")
+        and job.get("status") not in CLOSED_JOB_STATUSES
+        and (not shortlisted_only or job.get("status") == "shortlisted")
         and (job.get("match_score") or 0) >= min_score
         and applications.get(job["job_url"], {}).get("status") not in DONE_STATUSES
     ]
@@ -242,6 +249,56 @@ def apply(
             print("Review each tab, answer anything left blank, and click Submit yourself.")
             print("Close the browser window when you are done.")
             watch_for_submissions(browser, database, open_tabs)
+
+
+def auto_apply_jobs(
+    context: RunContext,
+    database: Database,
+    browser: BrowserContext,
+    jobs: list[dict[str, Any]],
+    answers: dict[str, str],
+    budget: int,
+) -> list[tuple[dict[str, Any], EasyApplyResult]]:
+    """
+    Unattended Easy Apply: fill each form and submit it only when every
+    required question was answered from approved answers. Stops at the
+    first sign-in, checkpoint or CAPTCHA page. Never waits for a person.
+    """
+    settings = context.settings.easy_apply
+    results: list[tuple[dict[str, Any], EasyApplyResult]] = []
+    submitted = 0
+    for index, job in enumerate(jobs):
+        if submitted >= budget:
+            logger.info("LinkedIn auto-apply: daily cap reached")
+            break
+        if index:
+            time.sleep(settings.seconds_between_jobs * random.uniform(0.8, 1.4))
+        page = browser.new_page()
+        try:
+            page.goto(job["job_url"], wait_until="domcontentloaded")
+            page.wait_for_timeout(3_000)
+            check_for_security_page(page)
+            filler = EasyApplyFiller(page, answers, settings.max_steps_per_application)
+            result = filler.prepare()
+            if result.status == READY_TO_SUBMIT and not result.unknown_questions:
+                if filler.submit():
+                    result.status = SUBMITTED
+                    submitted += 1
+                else:
+                    check_for_security_page(page)
+                    result.status = "Submit not confirmed (Easy Apply)"
+        except SecurityCheckError:
+            page.close()
+            raise
+        except Exception as error:
+            logger.exception("Auto-apply failed for %s", job["job_url"])
+            result = EasyApplyResult(f"Failed: {error}"[:200])
+        record(database, job, result)
+        logger.info("LinkedIn auto-apply | %s | %s | %s | questions: %s", result.status,
+                    job.get("title"), job.get("company"), "; ".join(result.unknown_questions) or "none")
+        results.append((job, result))
+        page.close()
+    return results
 
 
 def watch_for_submissions(

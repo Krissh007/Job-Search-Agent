@@ -25,7 +25,7 @@ def main() -> None:
         jobs = [
             job
             for job in database.get_jobs()
-            if job.get("status") not in ("rejected", "skipped", "applied")
+            if job.get("status") not in ("rejected", "skipped", "applied", "interviewing", "offer")
         ]
 
     prepared_jobs = prepare_new_applications(
